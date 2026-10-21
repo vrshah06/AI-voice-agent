@@ -1,0 +1,158 @@
+{
+  "samples": {
+    "identify_patient": {
+      "request": {
+        "name": "identify_patient",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Thank you, Eleanor Vance. I located your demo patient profile with chart ID PAT-DEMO-001. Please note your identity is unverified for this session.",
+        "data": {
+          "status": "existing_demo_patient",
+          "patient_id": "PAT-DEMO-001",
+          "identity_verified": false
+        }
+      }
+    },
+    "check_appointment_availability": {
+      "request": {
+        "name": "check_appointment_availability",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12",
+          "doctor_name": "Dr. Chintan Shah",
+          "requested_date": "2026-10-25"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "For Dr. Chintan Shah on Sunday, October 25, 2026, available demo times are 09:00, 11:00, 14:30. Which of these times works best for you?",
+        "data": {
+          "status": "available",
+          "available_slots": ["09:00", "11:00", "14:30"]
+        }
+      }
+    },
+    "book_appointment": {
+      "request": {
+        "name": "book_appointment",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12",
+          "doctor_name": "Dr. Chintan Shah",
+          "appointment_date": "2026-10-25",
+          "appointment_time": "09:00"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Your simulated appointment with Dr. Chintan Shah is booked for Sunday, October 25, 2026 at 09:00. Your demo booking reference is BK-DEMO-20261025-0900-4821.",
+        "data": {
+          "status": "confirmed",
+          "booking_reference": "BK-DEMO-20261025-0900-4821"
+        }
+      }
+    },
+    "reschedule_appointment": {
+      "request": {
+        "name": "reschedule_appointment",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12",
+          "appointment_reference": "BK-DEMO-20261025-0900-4821",
+          "new_date": "2026-10-28",
+          "new_time": "11:00"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Your appointment has been successfully rescheduled to Wednesday, October 28, 2026 at 11:00 with Dr. Chintan Shah.",
+        "data": {
+          "status": "rescheduled",
+          "booking_reference": "BK-DEMO-20261025-0900-4821",
+          "new_date": "2026-10-28",
+          "new_time": "11:00"
+        }
+      }
+    },
+    "cancel_appointment": {
+      "request": {
+        "name": "cancel_appointment",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12",
+          "appointment_reference": "BK-DEMO-20261025-0900-4821"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Your appointment on 2026-10-28 at 11:00 has been cancelled. Confirmation reference: BK-DEMO-20261025-0900-4821.",
+        "data": {
+          "status": "cancelled",
+          "booking_reference": "BK-DEMO-20261025-0900-4821"
+        }
+      }
+    },
+    "request_medication_refill": {
+      "request": {
+        "name": "request_medication_refill",
+        "args": {
+          "patient_name": "Eleanor Vance",
+          "date_of_birth": "1985-04-12",
+          "medication_name": "Lisinopril 10mg",
+          "preferred_pharmacy_name": "Walgreens Pharmacy #5812",
+          "pharmacy_location": "100 Main Street, Springfield"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "I have submitted your refill request for Lisinopril 10mg to be sent to Walgreens Pharmacy #5812 at 100 Main Street, Springfield. Your simulated tracking reference is REF-DEMO-73912. An authorized clinician must review and approve all refills before they are dispensed.",
+        "data": {
+          "status": "pending_prescriber_review",
+          "refill_reference": "REF-DEMO-73912",
+          "requires_prescriber_approval": true
+        }
+      }
+    },
+    "answer_clinic_question": {
+      "request": {
+        "name": "answer_clinic_question",
+        "args": {
+          "question": "What are your clinic hours?"
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Md Primary Care INC. is open Monday to Friday, 8:00 AM to 5:00 PM EST. We are closed on Saturdays, Sundays, and major holidays.",
+        "data": {
+          "answer_found": true,
+          "topic": "hours",
+          "source": "Md Primary Care INC. Official Policies"
+        }
+      }
+    },
+    "take_message": {
+      "request": {
+        "name": "take_message",
+        "args": {
+          "caller_name": "Eleanor Vance",
+          "callback_number": "561-208-6041",
+          "recipient": "Dr. Chintan Shah",
+          "message": "Please call me back regarding my test results."
+        }
+      },
+      "response": {
+        "status": "success",
+        "message": "Thank you, Eleanor Vance. I have recorded your message for Dr. Chintan Shah. We will return your call at 561-208-6041. Your message confirmation reference is MSG-DEMO-84210.",
+        "data": {
+          "status": "recorded",
+          "message_id": "MSG-DEMO-84210"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,240 @@
+{
+  "retell_custom_tools": [
+    {
+      "name": "identify_patient",
+      "description": "Collects caller full name and date of birth to look up chart at Md Primary Care INC. Note: This identifies the caller record but leaves identity unverified.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/identify_patient",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full legal name as spoken by caller (e.g., 'Eleanor Vance')"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in ISO format YYYY-MM-DD (e.g., '1985-04-12')"
+          }
+        },
+        "required": ["patient_name", "date_of_birth"]
+      }
+    },
+    {
+      "name": "check_appointment_availability",
+      "description": "Queries sample available appointment time slots for Dr. Chintan Shah at Md Primary Care INC. Rejects past dates.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/check_appointment_availability",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "doctor_name": {
+            "type": "string",
+            "description": "Doctor name (defaults to 'Dr. Chintan Shah')"
+          },
+          "requested_date": {
+            "type": "string",
+            "description": "Requested appointment date in YYYY-MM-DD format (must be today or in the future)"
+          }
+        },
+        "required": ["patient_name", "date_of_birth", "requested_date"]
+      }
+    },
+    {
+      "name": "book_appointment",
+      "description": "Books a simulated appointment slot with Dr. Chintan Shah. Validates slot existence and prevents duplicate bookings.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/book_appointment",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "doctor_name": {
+            "type": "string",
+            "description": "Doctor name (e.g., 'Dr. Chintan Shah')"
+          },
+          "appointment_date": {
+            "type": "string",
+            "description": "Appointment date in YYYY-MM-DD format"
+          },
+          "appointment_time": {
+            "type": "string",
+            "description": "Selected slot time in 24-hour HH:MM format (e.g., '09:00', '11:00', or '14:30')"
+          }
+        },
+        "required": ["patient_name", "date_of_birth", "doctor_name", "appointment_date", "appointment_time"]
+      }
+    },
+    {
+      "name": "reschedule_appointment",
+      "description": "Reschedules an existing confirmed appointment at Md Primary Care INC. to a new date and time.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/reschedule_appointment",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full legal name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "appointment_reference": {
+            "type": "string",
+            "description": "Booking reference code (e.g. BK-DEMO-...) if provided"
+          },
+          "new_date": {
+            "type": "string",
+            "description": "New target date in YYYY-MM-DD format"
+          },
+          "new_time": {
+            "type": "string",
+            "description": "New target slot time in 24-hour HH:MM format (e.g. 09:00, 11:00, 14:30)"
+          }
+        },
+        "required": ["patient_name", "date_of_birth", "new_date", "new_time"]
+      }
+    },
+    {
+      "name": "cancel_appointment",
+      "description": "Cancels an existing appointment at Md Primary Care INC. and releases the reserved slot.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/cancel_appointment",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full legal name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "appointment_reference": {
+            "type": "string",
+            "description": "Booking reference code if provided"
+          }
+        },
+        "required": ["patient_name", "date_of_birth"]
+      }
+    },
+    {
+      "name": "request_medication_refill",
+      "description": "Submits a simulated prescription refill request for clinical staff review at Md Primary Care INC.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/request_medication_refill",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "medication_name": {
+            "type": "string",
+            "description": "Name and dosage of the requested medication (e.g., 'Lisinopril 10mg')"
+          },
+          "preferred_pharmacy_name": {
+            "type": "string",
+            "description": "Pharmacy chain or name (e.g., 'Walgreens' or 'CVS Pharmacy')"
+          },
+          "pharmacy_location": {
+            "type": "string",
+            "description": "Pharmacy street address, cross street, or city"
+          }
+        },
+        "required": ["patient_name", "date_of_birth", "medication_name", "preferred_pharmacy_name", "pharmacy_location"]
+      }
+    },
+    {
+      "name": "answer_clinic_question",
+      "description": "Queries approved clinic knowledge for Md Primary Care INC. on hours, location, accepted insurance, doctors, and visit preparation.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/answer_clinic_question",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The caller's general question regarding clinic policies or details"
+          }
+        },
+        "required": ["question"]
+      }
+    },
+    {
+      "name": "take_message",
+      "description": "Records a message from the caller to be delivered to Md Primary Care INC. doctors or clinical staff.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/take_message",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "caller_name": {
+            "type": "string",
+            "description": "Caller full name"
+          },
+          "callback_number": {
+            "type": "string",
+            "description": "Callback phone number"
+          },
+          "recipient": {
+            "type": "string",
+            "description": "Intended recipient (e.g., 'Dr. Chintan Shah', 'Nursing', 'Front Desk')"
+          },
+          "message": {
+            "type": "string",
+            "description": "Content of the message"
+          }
+        },
+        "required": ["caller_name", "callback_number", "message"]
+      }
+    }
+  ]
+}
