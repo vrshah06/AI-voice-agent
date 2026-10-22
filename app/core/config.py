@@ -29,6 +29,22 @@ class Settings(BaseSettings):
         "No real appointments are booked, no prescriptions are dispensed, and identity is unverified."
     )
 
+    # eClinicalWorks (eCW) SMART Backend Services Configuration
+    ECW_ENABLED: bool = False
+    ECW_ENV: str = "sandbox"  # 'sandbox' or 'production'
+    ECW_CLIENT_ID: str = ""
+    ECW_KEY_ID: str = "ecw-key-1"
+    ECW_PRIVATE_KEY: str = ""  # PEM string in Render Secret / Env
+    ECW_PRIVATE_KEY_PATH: str = "keys/private_key.pem"
+    ECW_PUBLIC_KEY_PATH: str = "keys/public_key.pem"
+    # eCW Developer Portal sandbox token endpoint (as verified from official documentation)
+    ECW_TOKEN_URL: str = "https://staging-oauthserver.ecwcloud.com/oauth/oauth2/token"
+    # Practice FHIR endpoint URL obtained after practice activation
+    ECW_FHIR_BASE_URL: str = ""
+    ECW_SCOPES: str = "system/Patient.read"
+    ECW_ASSERTION_EXPIRY_SECONDS: int = 300
+
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

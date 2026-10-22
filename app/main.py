@@ -13,6 +13,7 @@ from app.api.medications import router as medications_router
 from app.api.messages import router as messages_router
 from app.api.patient import router as patient_router
 from app.api.retell import router as retell_router
+from app.api.auth import router as auth_router
 from app.core.config import settings
 
 # Configure basic logging
@@ -161,3 +162,4 @@ app.include_router(medications_router)
 app.include_router(knowledge_router)
 app.include_router(messages_router)
 app.include_router(retell_router)
+app.include_router(auth_router)

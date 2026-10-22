@@ -23,6 +23,9 @@ A modular virtual receptionist voice backend built with **Python 3.12**, **FastA
 | `/api/messages` | `POST` | Records caller messages for Dr. Chintan Shah, nursing, or clinic staff with tracking reference. |
 | `/api/retell/webhook` | `POST` | Unified Retell AI tool webhook adapter (handles wrapped and flat formats). |
 | `/api/retell/tools/{tool_name}` | `POST` | Dedicated named tool endpoints for Retell custom functions. |
+| `/.well-known/jwks.json` | `GET` | Standards-compliant RFC 7517 JWKS endpoint (RS384) for eCW Developer Portal verification. |
+| `/api/auth/ecw-status` | `GET` | Health, metadata, and configuration status for eCW SMART on FHIR backend service. |
+
 
 ---
 

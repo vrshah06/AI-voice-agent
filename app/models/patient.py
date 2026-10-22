@@ -55,3 +55,35 @@ class PatientIdentifyResponse(BaseDemoResponse):
         ...,
         description="Spoken confirmation message suitable for the voice agent to read."
     )
+
+
+class PatientInfoRequest(BaseModel):
+    """Payload to retrieve patient information following identity verification."""
+    patient_name: str = Field(..., min_length=2, max_length=100, description="Full legal name.")
+    date_of_birth: date = Field(..., description="Date of birth in YYYY-MM-DD format.")
+    patient_id: Optional[str] = Field(None, description="Optional patient chart ID if already identified.")
+
+    @field_validator("patient_name")
+    @classmethod
+    def clean_name(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Patient name cannot be blank.")
+        return cleaned
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def validate_dob(cls, v: date) -> date:
+        return validate_dob_not_future(v)
+
+
+class PatientInfoResponse(BaseDemoResponse):
+    """Structured response for patient information retrieval."""
+    status: str = Field(default="success")
+    patient_id: str = Field(...)
+    patient_name: str = Field(...)
+    date_of_birth: str = Field(...)
+    is_verified: bool = Field(default=False)
+    message: str = Field(...)
+    details: Optional[dict] = Field(default=None)
+

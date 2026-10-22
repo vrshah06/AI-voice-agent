@@ -24,6 +24,34 @@
       }
     },
     {
+      "name": "get_patient_information",
+      "description": "Retrieves authorized clinic and provider details for an identified patient. Requires name and date of birth.",
+      "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/get_patient_information",
+      "method": "POST",
+      "headers": {
+        "X-Api-Key": "demo-clinic-secret-key-12345"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "description": "Patient's full legal name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "description": "Patient's date of birth in YYYY-MM-DD format"
+          },
+          "patient_id": {
+            "type": "string",
+            "description": "Optional patient chart ID if previously identified"
+          }
+        },
+        "required": ["patient_name", "date_of_birth"]
+      }
+    },
+
+    {
       "name": "check_appointment_availability",
       "description": "Queries sample available appointment time slots for Dr. Chintan Shah at Md Primary Care INC. Rejects past dates.",
       "url": "https://omen-reassign-plausible.ngrok-free.dev/api/retell/tools/check_appointment_availability",

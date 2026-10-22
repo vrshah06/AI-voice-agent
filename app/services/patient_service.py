@@ -59,9 +59,44 @@ class PatientService:
             message=message,
         )
 
+    def get_patient_information(self, request) -> Dict[str, any]:
+        """Retrieve authorized patient profile details after verifying identity."""
+        dob_str = request.date_of_birth.isoformat()
+        key = self._make_key(request.patient_name, dob_str)
+
+        # Check if patient exists
+        if key in self._synthetic_patients:
+            record = self._synthetic_patients[key]
+            return {
+                "status": "success",
+                "patient_id": record["patient_id"],
+                "patient_name": record["patient_name"],
+                "date_of_birth": record["date_of_birth"],
+                "is_verified": True,
+                "message": f"Patient record found for {record['patient_name']}.",
+                "details": {
+                    "primary_care_physician": "Dr. Chintan Shah",
+                    "clinic": "Md Primary Care INC",
+                    "preferred_pharmacy": "CVS Pharmacy - East Boynton Beach",
+                    "status": "Active Patient",
+                },
+            }
+
+        # If not already existing, require identification first
+        return {
+            "status": "unverified",
+            "patient_id": "",
+            "patient_name": request.patient_name,
+            "date_of_birth": dob_str,
+            "is_verified": False,
+            "message": "I could not locate an active chart with that name and date of birth. Please verify the information with our receptionist.",
+            "details": None,
+        }
+
     def reset(self) -> None:
         """Reset state for clean automated testing."""
         self.__init__()
 
 
 patient_service = PatientService()
+
