@@ -41,8 +41,16 @@ def test_well_known_jwks_structure(client):
         assert field not in jwk, f"Private key field '{field}' leaked in public JWKS!"
 
 
+def test_well_known_jwks_head_request(client):
+    """JWKS endpoint must respond to HTTP HEAD requests with status 200 (for curl -I and health checkers)."""
+    response = client.head("/.well-known/jwks.json")
+    assert response.status_code == 200
+    assert "application/json" in response.headers.get("content-type", "")
+
+
 def test_alias_jwks_matches_well_known(client):
     """The alias /api/auth/jwks.json must return identical payload to /.well-known/jwks.json."""
+
     resp1 = client.get("/.well-known/jwks.json")
     resp2 = client.get("/api/auth/jwks.json")
     assert resp1.status_code == 200
