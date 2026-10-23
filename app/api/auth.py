@@ -8,9 +8,8 @@ from app.core.jwks import key_manager
 router = APIRouter(tags=["eCW Authentication & JWKS"])
 
 
-@router.api_route(
+@router.get(
     "/.well-known/jwks.json",
-    methods=["GET", "HEAD"],
     summary="eCW JWKS Public Key Set",
     description=(
         "Standards-compliant JSON Web Key Set (JWKS) endpoint per RFC 7517. "
@@ -20,6 +19,10 @@ router = APIRouter(tags=["eCW Authentication & JWKS"])
     ),
     response_class=JSONResponse,
 )
+@router.head(
+    "/.well-known/jwks.json",
+    include_in_schema=False,
+)
 async def get_well_known_jwks(request: Request) -> Any:
     """Return the RFC 7517 JWK Set containing our public signing key."""
     if request.method == "HEAD":
@@ -27,12 +30,15 @@ async def get_well_known_jwks(request: Request) -> Any:
     return key_manager.get_jwks()
 
 
-@router.api_route(
+@router.get(
     "/api/auth/jwks.json",
-    methods=["GET", "HEAD"],
     summary="eCW JWKS Public Key Set (Alias)",
     description="Alias endpoint for the public JWKS set supporting GET and HEAD.",
     response_class=JSONResponse,
+)
+@router.head(
+    "/api/auth/jwks.json",
+    include_in_schema=False,
 )
 async def get_api_jwks(request: Request) -> Any:
     """Alias for /.well-known/jwks.json."""
@@ -41,11 +47,14 @@ async def get_api_jwks(request: Request) -> Any:
     return key_manager.get_jwks()
 
 
-@router.api_route(
+@router.get(
     "/api/auth/ecw-status",
-    methods=["GET", "HEAD"],
     summary="eCW Integration & Auth Status",
     description="Returns public metadata and readiness status for the eClinicalWorks SMART on FHIR integration.",
+)
+@router.head(
+    "/api/auth/ecw-status",
+    include_in_schema=False,
 )
 async def get_ecw_auth_status(request: Request) -> Any:
     """Safe status overview of the eCW backend configuration."""
@@ -53,7 +62,6 @@ async def get_ecw_auth_status(request: Request) -> Any:
         return Response(status_code=status.HTTP_200_OK, media_type="application/json")
 
     base_url = str(request.base_url).rstrip("/")
-    jwk = key_manager.get_public_jwk()
 
     return {
         "status": "ready" if settings.ECW_CLIENT_ID else "pending_client_id",

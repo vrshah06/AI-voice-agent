@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # eCW Developer Portal sandbox token endpoint (as verified from official documentation)
     ECW_TOKEN_URL: str = "https://staging-oauthserver.ecwcloud.com/oauth/oauth2/token"
     # Practice FHIR endpoint URL obtained after practice activation
-    ECW_FHIR_BASE_URL: str = ""
+    ECW_FHIR_BASE_URL: str = "https://staging-fhir.ecwcloud.com/fhir/r4/FFBJCD"
     ECW_SCOPES: str = "system/Patient.read"
     ECW_ASSERTION_EXPIRY_SECONDS: int = 300
 

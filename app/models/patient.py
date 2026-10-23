@@ -1,9 +1,87 @@
-"""Patient data models for identification and lookup."""
+"""Patient data models for identification, lookup, and eCW FHIR retrieval."""
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from app.models.common import BaseDemoResponse, validate_dob_not_future
 
+
+# =====================================================================
+# Real eCW FHIR Demographics Models (Receptionist Minimum Necessary)
+# =====================================================================
+
+class PatientAddress(BaseModel):
+    """Permitted address demographic fields for receptionist routing."""
+    line: Optional[str] = Field(default=None, description="Street address line(s).")
+    city: Optional[str] = Field(default=None, description="City.")
+    state: Optional[str] = Field(default=None, description="State or province.")
+    postal_code: Optional[str] = Field(default=None, description="Postal / ZIP code.")
+
+
+class PatientDemographicsResponse(BaseModel):
+    """Minimum necessary demographic information for receptionist patient retrieval.
+
+    Strictly excludes sensitive medical information (no clinical notes, diagnoses,
+    conditions, prescriptions, medications, observation results, or lab data).
+    """
+    patient_id: str = Field(
+        ...,
+        description="eCW / FHIR Patient logical identifier.",
+        examples=["12345"]
+    )
+    first_name: Optional[str] = Field(default=None, description="Patient given / first name.")
+    last_name: Optional[str] = Field(default=None, description="Patient family / last name.")
+    full_name: str = Field(
+        ...,
+        description="Formatted full legal name.",
+        examples=["Eleanor Vance"]
+    )
+    date_of_birth: Optional[str] = Field(
+        default=None,
+        description="Date of birth in YYYY-MM-DD format.",
+        examples=["1985-04-12"]
+    )
+    gender: Optional[str] = Field(
+        default=None,
+        description="Administrative sex / gender as recorded in EHR.",
+        examples=["female"]
+    )
+    phone: Optional[str] = Field(
+        default=None,
+        description="Primary contact phone number.",
+        examples=["561-555-0199"]
+    )
+    email: Optional[str] = Field(
+        default=None,
+        description="Contact email address.",
+        examples=["patient@example.com"]
+    )
+    address: Optional[PatientAddress] = Field(
+        default=None,
+        description="Patient mailing address."
+    )
+    active: Optional[bool] = Field(
+        default=True,
+        description="Whether this patient record is active in the EHR."
+    )
+    preferred_language: Optional[str] = Field(
+        default=None,
+        description="Patient preferred spoken/written language.",
+        examples=["English"]
+    )
+
+
+class PatientSearchResponse(BaseModel):
+    """Response containing matched patient demographic records from eCW FHIR."""
+    total: int = Field(..., description="Number of patients found.")
+    patients: List[PatientDemographicsResponse] = Field(
+        default_factory=list,
+        description="List of retrieved patient demographic records."
+    )
+
+
+# =====================================================================
+# Retell AI Voice Tool Compatibility Models
+# =====================================================================
 
 class PatientIdentifyRequest(BaseModel):
     """Payload to identify a patient by name and date of birth."""
@@ -86,4 +164,3 @@ class PatientInfoResponse(BaseDemoResponse):
     is_verified: bool = Field(default=False)
     message: str = Field(...)
     details: Optional[dict] = Field(default=None)
-
