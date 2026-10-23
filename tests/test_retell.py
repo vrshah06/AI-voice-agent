@@ -187,3 +187,55 @@ def test_retell_auth_failure(client: TestClient):
     )
     assert response.status_code == 401
     assert "Unauthorized" in response.text
+
+
+def test_retell_verify_patient_and_get_info(client: TestClient, auth_headers: dict):
+    """Test verify_patient alias followed by get_patient_information tool call."""
+    # 1. Verify patient
+    verify_resp = client.post(
+        "/api/retell/webhook",
+        json={
+            "name": "verify_patient",
+            "args": {"patient_name": "Eleanor Vance", "date_of_birth": "1985-04-12"},
+        },
+        headers=auth_headers,
+    )
+    assert verify_resp.status_code == 200
+    assert verify_resp.json()["status"] == "success"
+
+    # 2. Get patient info
+    info_resp = client.post(
+        "/api/retell/webhook",
+        json={
+            "name": "get_patient_information",
+            "args": {"patient_name": "Eleanor Vance", "date_of_birth": "1985-04-12"},
+        },
+        headers=auth_headers,
+    )
+    assert info_resp.status_code == 200
+    info_data = info_resp.json()
+    assert info_data["status"] == "success"
+    assert info_data["data"]["is_verified"] is True
+    assert info_data["data"]["patient_id"] == "PAT-DEMO-001"
+
+
+def test_retell_submit_refill_request_alias(client: TestClient, auth_headers: dict):
+    """Test submit_refill_request alias functionality."""
+    res = client.post(
+        "/api/retell/webhook",
+        json={
+            "name": "submit_refill_request",
+            "args": {
+                "patient_name": "Eleanor Vance",
+                "date_of_birth": "1985-04-12",
+                "medication_name": "Lipitor 20mg",
+                "preferred_pharmacy_name": "Walgreens",
+                "pharmacy_location": "Main St",
+            },
+        },
+        headers=auth_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    assert "REF-DEMO-" in res.json()["data"]["refill_reference"]
+

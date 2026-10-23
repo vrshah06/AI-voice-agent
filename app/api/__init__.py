@@ -6,6 +6,7 @@ from app.api.medications import router as medications_router
 from app.api.knowledge import router as knowledge_router
 from app.api.messages import router as messages_router
 from app.api.retell import router as retell_router
+from app.api.auth import router as auth_router
 
 __all__ = [
     "health_router",
@@ -15,4 +16,5 @@ __all__ = [
     "knowledge_router",
     "messages_router",
     "retell_router",
+    "auth_router",
 ]

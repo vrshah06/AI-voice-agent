@@ -25,3 +25,11 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Cryptographic Keys & Secrets (Never commit to VCS)
+keys/
+*.pem
+*.key
+*.pub
+private_key*
+

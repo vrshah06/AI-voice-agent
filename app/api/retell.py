@@ -19,7 +19,7 @@ from app.models.appointments import (
 from app.models.knowledge import ClinicKnowledgeRequest
 from app.models.medications import MedicationRefillRequest
 from app.models.messages import TakeMessageRequest
-from app.models.patient import PatientIdentifyRequest
+from app.models.patient import PatientIdentifyRequest, PatientInfoRequest
 from app.models.retell import RetellToolResponse, RetellWebhookRequest
 from app.services.appointment_service import appointment_service
 from app.services.knowledge_service import knowledge_service
@@ -41,7 +41,7 @@ def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
     normalized_name = tool_name.strip().lower()
 
     try:
-        # 1. Identify Patient
+        # 1. Identify / Verify Patient
         if normalized_name in ["identify_patient", "patient_identify", "verify_patient"]:
             req = PatientIdentifyRequest(**args)
             result = patient_service.identify_patient(req)
@@ -49,6 +49,16 @@ def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
                 status="success",
                 message=result.message,
                 data=result.model_dump(),
+            )
+
+        # 1b. Get Patient Information (Post-Verification)
+        elif normalized_name in ["get_patient_information", "get_patient_info", "patient_info", "lookup_patient"]:
+            req = PatientInfoRequest(**args)
+            info_result = patient_service.get_patient_information(req)
+            return RetellToolResponse(
+                status=info_result.get("status", "success"),
+                message=info_result["message"],
+                data=info_result,
             )
 
         # 2. Check Availability
@@ -92,7 +102,12 @@ def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
             )
 
         # 6. Prescription Refill
-        elif normalized_name in ["request_medication_refill", "medication_refill", "refill_medication"]:
+        elif normalized_name in [
+            "request_medication_refill",
+            "medication_refill",
+            "refill_medication",
+            "submit_refill_request",
+        ]:
             req = MedicationRefillRequest(**args)
             result = refill_service.request_refill(req)
             return RetellToolResponse(
@@ -100,6 +115,7 @@ def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
                 message=result.message,
                 data=result.model_dump(),
             )
+
 
         # 7. Clinic Knowledge / FAQ
         elif normalized_name in ["answer_clinic_question", "clinic_question", "faq", "knowledge_answer", "answer_question"]:
