@@ -1,6 +1,6 @@
 # 🩺 AI Receptionist for Md Primary Care INC.
 
-A modular virtual receptionist voice and EHR integration backend built with **Python 3.12**, **FastAPI**, **Pydantic v2**, and **Retell AI**, featuring real **eClinicalWorks (eCW) SMART Backend Services** patient retrieval via FHIR R4.
+A modular virtual receptionist voice and EHR integration backend built with **Python 3.12**, **FastAPI**, **Pydantic v2**, and **Retell AI**, featuring real **eClinicalWorks (eCW) SMART Backend Services** patient retrieval and search via FHIR R4.
 
 **Live Backend:** `https://ai-voice-agent-jlez.onrender.com`
 
@@ -10,8 +10,9 @@ A modular virtual receptionist voice and EHR integration backend built with **Py
 
 | Endpoint | Method | Purpose |
 | :--- | :--- | :--- |
-| `GET /api/patients/{patient_id}` | `GET` | **Real eCW Patient Demographics**: Retrieves authorized patient by FHIR ID from eClinicalWorks EHR. |
-| `GET /api/patients` | `GET` | **eCW Patient Search**: Search patients using supported US Core FHIR parameters (`family`, `given`, `birthdate`, `identifier`, `gender`). |
+| `GET /api/patients/search` | `GET` | **eCW Name & DOB Search**: Targeted patient search by `first_name`, `last_name`, and `dob` (YYYY-MM-DD) via official US Core parameters. |
+| `GET /api/patients` | `GET` | **eCW Patient Directory (Paginated)**: Retrieves accessible patient records from eCW with continuation tokens. Requires API key or Bearer token authorization. |
+| `GET /api/patients/{patient_id}` | `GET` | **eCW Patient Demographics by ID**: Retrieves authorized patient demographic details by FHIR ID. |
 | `/.well-known/jwks.json` | `GET`, `HEAD` | **RFC 7517 JWKS Endpoint**: Public RSA signing key (`alg: RS384`, `kid`) for eCW OAuth authorization server. |
 | `/api/auth/ecw-status` | `GET` | **eCW Auth Diagnostics**: Public metadata, readiness, and registration status for SMART Backend Services. |
 | `/health` | `GET` | Server health check and system uptime. |
@@ -28,6 +29,36 @@ A modular virtual receptionist voice and EHR integration backend built with **Py
 
 ---
 
+## 🔍 Patient API Details
+
+### API One: `GET /api/patients/search`
+Targeted search for receptionist workflows using verified eCW US Core search parameters:
+- **Query Parameters**:
+  - `first_name` (string, required): Patient legal given name.
+  - `last_name` (string, required): Patient legal family name.
+  - `dob` (string, required): Patient date of birth in `YYYY-MM-DD` format.
+- **Upstream Query**:
+  ```http
+  GET {ECW_FHIR_BASE_URL}/Patient?given=Alex&family=Smith&birthdate=1985-06-15
+  ```
+- **Response Structure**:
+  - `match_status`: `"no_match"`, `"single_match"`, or `"multiple_matches"`.
+  - `match_count`: Number of matched records.
+  - `patients`: Array of minimal demographic summaries (`patient_id`, `first_name`, `last_name`, `full_name`, `date_of_birth`, `active`).
+  - `identity_verification_required`: `true` (enforcing secondary identification protocol before disclosing PHI).
+  - `notice`: Clinical instruction for receptionist safety.
+
+### API Two: `GET /api/patients`
+Paginated patient directory from actual eCW environment:
+- **Authorization**: Protected via `X-Api-Key` or `Authorization: Bearer <key>`. Public unrestricted access is blocked.
+- **Query Parameters**:
+  - `page_size` (int, default: 20, max: 100): Number of records per page.
+  - `page_token` (string, optional): Next-page continuation link/token from previous response.
+- **Population Search Policy**:
+  - eCW practice policies strictly mandate search filters (e.g., name, birthdate, identifier). If an unindexed population query is rejected by eCW, this endpoint returns a clear `400 Bad Request` explaining the practice restriction rather than silently returning an incomplete list.
+
+---
+
 ## 🔐 eClinicalWorks SMART Backend Services Integration
 
 The eCW integration in `app/services/ecw_client.py` connects to eClinicalWorks using the **SMART on FHIR Backend Services Specification (RFC 7523 / OAuth 2.0 Client Credentials Grant)**.
@@ -35,15 +66,7 @@ The eCW integration in `app/services/ecw_client.py` connects to eClinicalWorks u
 ### Architecture Highlights
 - **Cryptographic Signing (RS384)**: Generates client assertions signed with an asymmetric RSA private key, matching the public key published at `/.well-known/jwks.json`.
 - **Token Lifecycle Management**: Caches access tokens in-memory and reuses them until expiration (with a 30-second buffer). In the event of an unexpected 401 response, the client automatically requests a fresh token and retries the request once.
-- **Receptionist Minimal Demographics**: Extracts only necessary demographic information:
-  - `patient_id`
-  - `full_name`, `first_name`, `last_name`
-  - `date_of_birth`
-  - `gender`
-  - `phone`, `email`
-  - `address` (`line`, `city`, `state`, `postal_code`)
-  - `preferred_language`
-  - `active`
+- **Receptionist Minimal Demographics**: Extracts only necessary demographic information (`patient_id`, `first_name`, `last_name`, `full_name`, `date_of_birth`, `active`).
 - **Clinical Privacy Shield**: Strictly suppresses and withholds sensitive clinical records (no conditions, diagnoses, medications, clinical notes, or lab results).
 - **Strict Anti-Mocking Rule**: Live requests **never** substitute mock or synthetic records when eCW returns an error or is unconfigured. Instead, the exact blocker is identified.
 
@@ -52,10 +75,11 @@ The eCW integration in `app/services/ecw_client.py` connects to eClinicalWorks u
 | Status Code | Reason | Cause / Blocker |
 | :--- | :--- | :--- |
 | `200 OK` | Retrieved successfully | Authorized patient demographics returned. |
-| `400 Bad Request` | Invalid query | Blank patient ID or missing search parameters. |
+| `400 Bad Request` | Invalid query / Restriction | Blank name, invalid date format, or eCW population query restriction without search filters. |
 | `401 Unauthorized` | Authentication failure | Missing `ECW_CLIENT_ID`, invalid client assertion, or rejected token. |
 | `403 Forbidden` | Access denied | Insufficient permissions (`system/Patient.read`) or practice tenant has not activated the app. |
 | `404 Not Found` | Patient not found | Requested `patient_id` does not exist in the practice EHR. |
+| `429 Too Many Requests` | Rate limit | eClinicalWorks server rate limit reached. |
 | `502 Bad Gateway` | Upstream EHR failure | eCW server returned 500/502/504 or malformed non-FHIR response. |
 | `503 Service Unavailable` | Service unavailable | Unconfigured `ECW_FHIR_BASE_URL`, connection timeout, or eCW outage. |
 
@@ -69,7 +93,7 @@ Configuration is managed via environment variables (see `.env.example`). **Never
 # eClinicalWorks SMART Backend Services
 ECW_ENABLED=true
 ECW_ENV="sandbox"
-ECW_CLIENT_ID="your-ecw-client-id-here"
+ECW_CLIENT_ID="b_ZpwoiCe2LZ-R42ue4waq0IUEWxQVe_AYSJD4K5xVs"
 ECW_KEY_ID="ecw-key-1"
 
 # In production (Render Secrets), paste the multi-line PEM string:
@@ -105,7 +129,15 @@ Execute the comprehensive test suite in PowerShell:
 ```powershell
 .\.venv\Scripts\pytest.exe -v
 ```
-All tests use isolated mock HTTP fixtures to validate token generation, expiration retries, demographic parsing, search, and all HTTP error codes (200, 401, 403, 404, 502, 503).
+All 69 automated tests execute across all 13 required scenarios:
+- Exact first-name, last-name, and DOB search
+- No matching patient, single matching patient, multiple matching patients
+- Invalid DOB format and future DOB rejection
+- Missing required query parameters (422)
+- Upstream authentication failure (401), permission failure (403), upstream failure (502)
+- Patient list pagination and terminal page handling
+- Unsupported population-wide search policy handling
+- Prevention of mock-data fallback
 
 ### Step 3: Verify Live Retrieval in Swagger UI (`/docs`)
 1. Start your local server:
@@ -114,75 +146,12 @@ All tests use isolated mock HTTP fixtures to validate token generation, expirati
    ```
 2. Open your browser to:
    👉 **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)** (or `https://ai-voice-agent-jlez.onrender.com/docs`)
-3. Navigate to the **eCW Patient Demographics** section:
-   - Click **`GET /api/patients/{patient_id}`**.
+3. Test **`GET /api/patients/search`**:
+   - Expand `GET /api/patients/search`.
    - Click **Try it out**.
-   - Enter a known sandbox patient ID (e.g., `12345` or your practice's test patient ID).
+   - Enter `first_name`, `last_name`, and `dob` (e.g. `Alex`, `Smith`, `1985-06-15`).
    - Click **Execute**.
-4. Observe the response:
-   - If properly authenticated: Returns `200 OK` with patient demographics.
-   - If `ECW_CLIENT_ID` is unconfigured: Returns `401 Unauthorized` with a clear explanation of the blocker.
-   - If the patient does not exist: Returns `404 Not Found`.
-   - If practice activation is pending: Returns `403 Forbidden`.
-
----
-
-## 📂 Project Architecture
-
-```
-AI Voice Agent/
-├── app/
-│   ├── main.py                     # FastAPI app, routers, and structured exception handlers
-│   ├── core/
-│   │   ├── config.py               # Pydantic Settings & environment variables
-│   │   ├── jwks.py                 # RFC 7517 JWKS & RS384 client assertion signer
-│   │   └── security.py             # Retell & webhook API key verification
-│   ├── models/
-│   │   ├── common.py               # Date validators and shared schemas
-│   │   ├── patient.py              # Receptionist demographics & search schemas
-│   │   ├── appointments.py         # Availability, Booking, Reschedule, Cancel schemas
-│   │   ├── medications.py          # Refill request schemas
-│   │   ├── knowledge.py            # Clinic knowledge query schemas
-│   │   ├── messages.py             # Caller message schemas
-│   │   └── retell.py               # Retell webhook & tool schemas
-│   ├── services/
-│   │   ├── ecw_client.py           # Reusable eCW SMART FHIR client & error mapper
-│   │   ├── patient_service.py      # Retell AI voice session state
-│   │   ├── appointment_service.py  # In-memory scheduling & conflict prevention
-│   │   ├── refill_service.py       # Refill requests & prescriber review flags
-│   │   ├── knowledge_service.py    # Approved clinic facts
-│   │   └── message_service.py      # Clinic staff message recording
-│   └── api/
-│       ├── health.py               # GET /health & GET /
-│       ├── patients.py             # GET /api/patients/{id} & GET /api/patients (Search)
-│       ├── auth.py                 # GET /.well-known/jwks.json & GET /api/auth/ecw-status
-│       ├── appointments.py         # POST /api/appointments/*
-│       ├── medications.py          # POST /api/medications/refill
-│       ├── knowledge.py            # POST /api/knowledge/answer
-│       ├── messages.py             # POST /api/messages
-│       └── retell.py               # POST /api/retell/* (Retell AI voice adapter)
-├── keys/
-│   ├── private_key.pem             # RSA Private Key for RS384 assertions (local dev)
-│   └── public_key.pem              # RSA Public Key published in JWKS
-├── retell/
-│   ├── agent_prompt.md             # System prompt for Retell voice agent
-│   ├── tools_schema.json           # Retell Custom Function definitions
-│   └── sample_payloads.json        # Example payloads
-├── scripts/
-│   └── sync_retell_flow.py         # One-click Retell agent synchronizer
-├── tests/
-│   ├── conftest.py                 # Pytest fixtures
-│   ├── test_ecw_client.py          # EcwClient unit tests (auth, retry, errors, demographics)
-│   ├── test_patient.py             # GET /api/patients/{id} & search integration tests
-│   ├── test_ecw_auth.py            # JWKS & client assertion cryptographic tests
-│   ├── test_appointments.py        # Appointment scheduling tests
-│   ├── test_medications.py         # Refill tests
-│   ├── test_knowledge.py           # Knowledge base tests
-│   ├── test_messages.py            # Messaging tests
-│   ├── test_health.py              # Health check tests
-│   └── test_retell.py              # Retell AI adapter tests
-├── .env.example
-├── .env
-├── requirements.txt
-└── README.md
-```
+4. Test **`GET /api/patients`** (List):
+   - Click **Authorize** at top of Swagger and enter your `X-Api-Key` or Bearer token.
+   - Expand `GET /api/patients`.
+   - Click **Try it out** and **Execute**.

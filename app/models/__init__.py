@@ -7,6 +7,9 @@ from app.models.patient import (
     PatientIdentifyResponse,
     PatientInfoRequest,
     PatientInfoResponse,
+    PatientListResponse,
+    PatientMatchSummary,
+    PatientSearchMatchResponse,
     PatientSearchResponse,
 )
 from app.models.appointments import (
@@ -28,6 +31,9 @@ __all__ = [
     "BaseDemoResponse",
     "PatientAddress",
     "PatientDemographicsResponse",
+    "PatientListResponse",
+    "PatientMatchSummary",
+    "PatientSearchMatchResponse",
     "PatientSearchResponse",
     "PatientIdentifyRequest",
     "PatientIdentifyResponse",

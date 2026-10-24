@@ -2,17 +2,20 @@
 
 Implements standards-compliant SMART Backend Services (RFC 7523) authentication
 using signed RS384 client assertions, access-token caching, and authorized
-FHIR R4 Patient retrieval and search against eClinicalWorks EHR.
+FHIR R4 Patient retrieval, targeted search, and paginated listing against eClinicalWorks EHR.
 
 Strictly enforces:
 1. Rejection of mock/synthetic fallback upon live EHR failure.
 2. Receptionist minimal necessary demographic extraction (no sensitive medical data).
-3. Standardized error mapping (401, 403, 404, 502, 503).
+3. Standardized error mapping (401, 403, 404, 429, 502, 503).
+4. No logging of patient PHI (names, DOBs), access tokens, or private keys.
 """
 import asyncio
+from datetime import date, datetime
 import logging
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
 import httpx
@@ -22,6 +25,9 @@ from app.core.jwks import key_manager as default_key_manager
 from app.models.patient import (
     PatientAddress,
     PatientDemographicsResponse,
+    PatientListResponse,
+    PatientMatchSummary,
+    PatientSearchMatchResponse,
     PatientSearchResponse,
 )
 
@@ -111,9 +117,10 @@ class EcwServiceUnavailableError(EcwClientError):
         self,
         detail: str = "eClinicalWorks service is temporarily unavailable or timed out.",
         blocker: Optional[str] = None,
+        status_code: int = status.HTTP_503_SERVICE_UNAVAILABLE,
     ) -> None:
         super().__init__(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status_code,
             detail=detail,
             blocker=blocker,
         )
@@ -153,7 +160,7 @@ class EcwClient:
         Never substitutes mock data if credentials or practice endpoints are missing.
         """
         client_id = self._settings.ECW_CLIENT_ID
-        if not client_id or client_id.strip() in ("", "your-ecw-client-id-here"):
+        if not client_id or not client_id.strip() or client_id.strip() == "your-ecw-client-id-here":
             raise EcwAuthError(
                 detail=(
                     "eClinicalWorks integration is not configured: ECW_CLIENT_ID is missing. "
@@ -203,6 +210,7 @@ class EcwClient:
             # 2. Form payload per SMART Backend Services specification (RFC 7523)
             form_data = {
                 "grant_type": "client_credentials",
+                "client_id": client_id,
                 "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                 "client_assertion": client_assertion,
                 "scope": self._settings.ECW_SCOPES,
@@ -251,6 +259,14 @@ class EcwClient:
                 raise EcwPermissionError(
                     detail=f"eClinicalWorks token request forbidden (403): {response.text}",
                     blocker="Registered app lacks requested scopes or practice activation",
+                )
+
+            if response.status_code == 429:
+                logger.warning("eCW OAuth server rate limit reached (429)")
+                raise EcwServiceUnavailableError(
+                    detail="eClinicalWorks OAuth token endpoint rate limit reached (HTTP 429).",
+                    blocker="eCW OAuth rate limit",
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
 
             if response.status_code >= 500:
@@ -317,7 +333,7 @@ class EcwClient:
         token = await self.get_access_token()
         headers = {
             "Authorization": f"Bearer {token}",
-            "Accept": "application/fhir+json, application/json",
+            "Accept": "application/fhir+json",
         }
 
         client = self._get_http_client()
@@ -331,13 +347,13 @@ class EcwClient:
                 headers["Authorization"] = f"Bearer {fresh_token}"
                 response = await client.get(url, headers=headers)
         except httpx.TimeoutException as exc:
-            logger.error("Timeout fetching patient %s from eCW: %s", pid, exc)
+            logger.error("Timeout fetching patient from eCW: %s", exc)
             raise EcwServiceUnavailableError(
                 detail=f"Connection timed out while fetching patient '{pid}' from eClinicalWorks.",
                 blocker="eCW FHIR server timeout",
             ) from exc
         except httpx.RequestError as exc:
-            logger.error("Network error fetching patient %s from eCW: %s", pid, exc)
+            logger.error("Network error fetching patient from eCW: %s", exc)
             raise EcwServiceUnavailableError(
                 detail=f"Communication failure connecting to eClinicalWorks FHIR server: {exc}",
                 blocker="eCW FHIR server network failure",
@@ -348,14 +364,14 @@ class EcwClient:
 
         # Handle HTTP status codes
         if response.status_code == 401:
-            logger.error("eCW FHIR request rejected with 401 Unauthorized for patient %s: %s", pid, response.text)
+            logger.error("eCW FHIR request rejected with 401 Unauthorized: %s", response.text)
             raise EcwAuthError(
                 detail=f"eClinicalWorks authentication failed (401 Unauthorized) when retrieving patient '{pid}'.",
                 blocker="eCW FHIR server rejected access token",
             )
 
         if response.status_code == 403:
-            logger.error("eCW FHIR access forbidden (403) for patient %s: %s", pid, response.text)
+            logger.error("eCW FHIR access forbidden (403): %s", response.text)
             raise EcwPermissionError(
                 detail=(
                     f"eClinicalWorks denied access (403 Forbidden) for patient '{pid}'. "
@@ -367,6 +383,13 @@ class EcwClient:
         if response.status_code == 404:
             logger.info("Patient '%s' not found in eCW FHIR (404)", pid)
             raise EcwNotFoundError(detail=f"Patient with ID '{pid}' was not found in eClinicalWorks EHR.")
+
+        if response.status_code == 429:
+            raise EcwServiceUnavailableError(
+                detail="eClinicalWorks FHIR rate limit reached (HTTP 429). Please retry shortly.",
+                blocker="eCW FHIR rate limit",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         if response.status_code == 503:
             logger.warning("eCW FHIR server temporarily unavailable (503): %s", response.text)
@@ -385,7 +408,7 @@ class EcwClient:
         if response.status_code != 200:
             logger.error("Unexpected eCW FHIR response status (%d): %s", response.status_code, response.text)
             raise EcwUpstreamError(
-                detail=f"eClinicalWorks FHIR server returned unexpected status code {response.status_code}.",
+                detail=f"eClinicalWorks FHIR server returned unexpected status code {response.status_code}: {response.text}",
                 blocker="eCW unexpected status code",
             )
 
@@ -408,56 +431,77 @@ class EcwClient:
 
         return self.extract_patient_demographics(fhir_resource)
 
-    async def search_patients(
+    async def search_patient_by_name_dob(
         self,
-        family: Optional[str] = None,
-        given: Optional[str] = None,
-        birthdate: Optional[str] = None,
-        identifier: Optional[str] = None,
-        name: Optional[str] = None,
-        gender: Optional[str] = None,
-        _id: Optional[str] = None,
-    ) -> PatientSearchResponse:
-        """Search patients in eCW FHIR using officially supported US Core search parameters.
+        first_name: str,
+        last_name: str,
+        dob: str,
+    ) -> PatientSearchMatchResponse:
+        """Search patient by First Name, Last Name, and Date of Birth using eCW US Core search parameters.
 
-        Supported parameters:
-        - family: Last name
-        - given: First name
-        - birthdate: YYYY-MM-DD
-        - identifier: MRN or identifier string
-        - name: Free-text name search
-        - gender: Administrative sex (male, female, other, unknown)
-        - _id: Specific patient ID
+        Upstream query:
+            GET {ECW_FHIR_BASE_URL}/Patient?given={first_name}&family={last_name}&birthdate={dob}
+
+        Safety rules:
+        - Input validation: verifies non-blank name and valid past ISO YYYY-MM-DD date.
+        - Matching name and DOB confirms record existence only.
+        - Returns structured PatientSearchMatchResponse with match_status ('no_match', 'single_match', 'multiple_matches').
+        - Never substitutes mock data on failure.
+        - Never logs patient names or DOBs.
         """
-        params: Dict[str, str] = {}
-        if family and family.strip():
-            params["family"] = family.strip()
-        if given and given.strip():
-            params["given"] = given.strip()
-        if birthdate and birthdate.strip():
-            params["birthdate"] = birthdate.strip()
-        if identifier and identifier.strip():
-            params["identifier"] = identifier.strip()
-        if name and name.strip():
-            params["name"] = name.strip()
-        if gender and gender.strip():
-            params["gender"] = gender.strip()
-        if _id and _id.strip():
-            params["_id"] = _id.strip()
+        clean_first = first_name.strip() if first_name else ""
+        clean_last = last_name.strip() if last_name else ""
+        clean_dob = dob.strip() if dob else ""
 
-        if not params:
+        if not clean_first:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one search parameter (family, given, birthdate, identifier, name, or gender) is required.",
+                detail="Query parameter 'first_name' is required and cannot be blank.",
+            )
+        if not clean_last:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Query parameter 'last_name' is required and cannot be blank.",
+            )
+        if not clean_dob:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Query parameter 'dob' is required and cannot be blank.",
+            )
+
+        # Validate DOB format and reasonableness
+        try:
+            parsed_dob = datetime.strptime(clean_dob, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format for 'dob': '{clean_dob}'. Expected format is YYYY-MM-DD.",
+            )
+
+        today = date.today()
+        if parsed_dob >= today:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Date of birth ({clean_dob}) must be in the past.",
+            )
+        if today.year - parsed_dob.year > 125 or parsed_dob.year < 1890:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Date of birth ({clean_dob}) is out of reasonable range.",
             )
 
         base_url = self._get_fhir_base_url()
         url = f"{base_url}/Patient"
+        params = {
+            "given": clean_first,
+            "family": clean_last,
+            "birthdate": clean_dob,
+        }
 
         token = await self.get_access_token()
         headers = {
             "Authorization": f"Bearer {token}",
-            "Accept": "application/fhir+json, application/json",
+            "Accept": "application/fhir+json",
         }
 
         client = self._get_http_client()
@@ -467,14 +511,41 @@ class EcwClient:
                 fresh_token = await self.get_access_token(force_refresh=True)
                 headers["Authorization"] = f"Bearer {fresh_token}"
                 response = await client.get(url, params=params, headers=headers)
+
+            # If rejected with 400, test alternative US Core parameter combinations
+            if response.status_code == 400:
+                # 1. Try explicit 'eq' comparator prefix (mandated by some eCW versions)
+                eq_params = {
+                    "given": clean_first,
+                    "family": clean_last,
+                    "birthdate": f"eq{clean_dob}",
+                }
+                logger.info("eCW rejected standard date search with 400. Retrying with 'eq' birthdate comparator...")
+                resp_eq = await client.get(url, params=eq_params, headers=headers)
+                if resp_eq.status_code == 200:
+                    response = resp_eq
+                elif resp_eq.status_code != 400:
+                    response = resp_eq
+                else:
+                    # 2. Try US Core combination 'name' and 'birthdate'
+                    name_params = {
+                        "name": f"{clean_first} {clean_last}",
+                        "birthdate": clean_dob,
+                    }
+                    logger.info("Retrying eCW Patient search with 'name' and 'birthdate' parameter combination...")
+                    resp_name = await client.get(url, params=name_params, headers=headers)
+                    if resp_name.status_code == 200:
+                        response = resp_name
+                    elif resp_name.status_code != 400:
+                        response = resp_name
         except httpx.TimeoutException as exc:
-            logger.error("Timeout during eCW Patient search: %s", exc)
+            logger.error("Timeout during eCW Patient name/dob search: %s", exc)
             raise EcwServiceUnavailableError(
-                detail="Connection timed out while querying eClinicalWorks Patient search.",
+                detail="Connection timed out while searching patient records in eClinicalWorks.",
                 blocker="eCW Patient search timeout",
             ) from exc
         except httpx.RequestError as exc:
-            logger.error("Network error during eCW Patient search: %s", exc)
+            logger.error("Network error during eCW Patient name/dob search: %s", exc)
             raise EcwServiceUnavailableError(
                 detail=f"Communication error connecting to eClinicalWorks Patient search: {exc}",
                 blocker="eCW Patient search network error",
@@ -484,15 +555,57 @@ class EcwClient:
                 await client.aclose()
 
         if response.status_code == 401:
-            raise EcwAuthError(detail="eClinicalWorks authentication failed (401) during patient search.")
+            raise EcwAuthError(
+                detail="eClinicalWorks authentication failed (401) during patient search.",
+                blocker="Invalid or expired access token",
+            )
         if response.status_code == 403:
-            raise EcwPermissionError(detail="eClinicalWorks permission denied (403) during patient search.")
-        if response.status_code == 503:
-            raise EcwServiceUnavailableError(detail="eClinicalWorks Patient search service is temporarily unavailable (503).")
+            raise EcwPermissionError(
+                detail="eClinicalWorks permission denied (403) for patient search. Ensure 'system/Patient.read' scope is active.",
+                blocker="Insufficient scope or practice authorization",
+            )
+        if response.status_code == 429:
+            raise EcwServiceUnavailableError(
+                detail="eClinicalWorks FHIR search rate limit reached (HTTP 429).",
+                blocker="eCW search rate limit",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         if response.status_code in (500, 502, 504):
-            raise EcwUpstreamError(detail=f"eClinicalWorks Patient search upstream failure (HTTP {response.status_code}).")
+            raise EcwUpstreamError(
+                detail=f"eClinicalWorks Patient search upstream failure (HTTP {response.status_code}).",
+                blocker=f"eCW upstream status {response.status_code}",
+            )
+        if response.status_code == 503:
+            raise EcwServiceUnavailableError(
+                detail="eClinicalWorks Patient search service is temporarily unavailable (503).",
+                blocker="eCW search service unavailable",
+            )
+        if response.status_code == 400:
+            logger.error("eCW Patient search returned 400: %s", response.text)
+            err_msg = response.text
+            try:
+                outcome = response.json()
+                if outcome.get("resourceType") == "OperationOutcome":
+                    issues = outcome.get("issue", [])
+                    diags = [
+                        i.get("diagnostics") or i.get("details", {}).get("text")
+                        for i in issues
+                        if i.get("diagnostics") or i.get("details", {}).get("text")
+                    ]
+                    if diags:
+                        err_msg = "; ".join(diags)
+            except Exception:
+                pass
+            raise EcwClientError(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"eClinicalWorks FHIR server rejected search request (400): {err_msg}",
+                blocker="eCW rejected search parameters or criteria",
+            )
         if response.status_code != 200:
-            raise EcwUpstreamError(detail=f"eClinicalWorks Patient search returned unexpected status {response.status_code}.")
+            raise EcwUpstreamError(
+                detail=f"eClinicalWorks Patient search returned unexpected status {response.status_code}: {response.text}",
+                blocker="Unexpected status code",
+            )
 
         try:
             bundle = response.json()
@@ -503,14 +616,216 @@ class EcwClient:
             raise EcwUpstreamError(detail="Expected FHIR searchset 'Bundle' from eCW Patient search.")
 
         entries = bundle.get("entry", [])
-        patients: List[PatientDemographicsResponse] = []
+        matched_summaries: List[PatientMatchSummary] = []
         for entry in entries:
             res = entry.get("resource")
             if res and res.get("resourceType") == "Patient":
-                demographics = self.extract_patient_demographics(res)
-                patients.append(demographics)
+                summary = self._extract_patient_summary(res)
+                matched_summaries.append(summary)
 
-        return PatientSearchResponse(total=len(patients), patients=patients)
+        count = len(matched_summaries)
+        if count == 0:
+            match_status_text = "no_match"
+            notice_text = (
+                "No matching patient records found with the provided name and date of birth in clinic EHR. "
+                "Verify spelling or check if patient is registered under an alternative name."
+            )
+        elif count == 1:
+            match_status_text = "single_match"
+            notice_text = (
+                "Single patient match confirmed. Notice: Matching name and DOB confirms record existence only. "
+                "Receptionist must perform secondary verification (e.g., phone or address confirmation) before disclosing protected information."
+            )
+        else:
+            match_status_text = "multiple_matches"
+            notice_text = (
+                f"Multiple ({count}) matching patient records found with identical name and date of birth. "
+                "Protected demographic disclosure withheld for patient safety. Transfer caller to receptionist for manual chart verification."
+            )
+
+        return PatientSearchMatchResponse(
+            match_status=match_status_text,
+            match_count=count,
+            patients=matched_summaries,
+            identity_verification_required=True,
+            notice=notice_text,
+        )
+
+    async def list_patients(
+        self,
+        page_size: int = 20,
+        page_token: Optional[str] = None,
+    ) -> PatientListResponse:
+        """Retrieve paginated patient records from actual eCW EHR environment.
+
+        Supports FHIR Bundle pagination links.
+        If eCW restricts population-wide patient search, returns a clear error explaining
+        the practice restriction rather than silently returning an incomplete list.
+        """
+        clamped_size = min(max(page_size, 1), 100)
+        base_url = self._get_fhir_base_url()
+
+        # Build request URL: either follow validated next link or query base with _count
+        if page_token and page_token.strip():
+            token_clean = page_token.strip()
+            # If page_token is a continuation URL, ensure it belongs to the verified FHIR base URL
+            if token_clean.startswith("http://") or token_clean.startswith("https://"):
+                parsed_base = urlparse(base_url)
+                parsed_token = urlparse(token_clean)
+                if parsed_token.netloc != parsed_base.netloc or not parsed_token.path.startswith(parsed_base.path):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid next_page_token: URL domain or path does not match configured practice FHIR base.",
+                    )
+                url = token_clean
+                params = None
+            else:
+                url = f"{base_url}/Patient"
+                params = {"_count": str(clamped_size), "page": token_clean}
+        else:
+            url = f"{base_url}/Patient"
+            params = {"_count": str(clamped_size)}
+
+        token = await self.get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/fhir+json",
+        }
+
+        client = self._get_http_client()
+        try:
+            response = await client.get(url, params=params, headers=headers)
+            if response.status_code == 401:
+                fresh_token = await self.get_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {fresh_token}"
+                response = await client.get(url, params=params, headers=headers)
+        except httpx.TimeoutException as exc:
+            logger.error("Timeout during eCW Patient listing: %s", exc)
+            raise EcwServiceUnavailableError(
+                detail="Connection timed out while retrieving patient list from eClinicalWorks.",
+                blocker="eCW Patient list timeout",
+            ) from exc
+        except httpx.RequestError as exc:
+            logger.error("Network error during eCW Patient listing: %s", exc)
+            raise EcwServiceUnavailableError(
+                detail=f"Communication error connecting to eClinicalWorks Patient list: {exc}",
+                blocker="eCW Patient list network error",
+            ) from exc
+        finally:
+            if self._custom_http_client is None:
+                await client.aclose()
+
+        # Handle eCW restriction on population-wide listing without search criteria
+        if response.status_code in (400, 403):
+            err_text = response.text.lower()
+            if (
+                "search criteria" in err_text
+                or "search without" in err_text
+                or "not supported" in err_text
+                or "parameter required" in err_text
+                or "operationoutcome" in err_text
+                or response.status_code == 400
+            ):
+                raise EcwClientError(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "eClinicalWorks EHR server restricts population-wide patient listing without search criteria. "
+                        "Practice security policy mandates searching by specific parameters (e.g., given, family, birthdate, identifier) "
+                        "rather than unrestricted population enumeration."
+                    ),
+                    blocker="eCW restricts unfiltered population queries without search parameters",
+                )
+            if response.status_code == 403:
+                raise EcwPermissionError(
+                    detail="eClinicalWorks denied permission (403) to list patient directory. Check provider app permissions.",
+                    blocker="App not authorized for patient directory enumeration",
+                )
+
+        if response.status_code == 401:
+            raise EcwAuthError(detail="eClinicalWorks authentication failed (401) during patient list retrieval.")
+        if response.status_code == 429:
+            raise EcwServiceUnavailableError(
+                detail="eClinicalWorks patient listing rate limit reached (HTTP 429).",
+                blocker="eCW list rate limit",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        if response.status_code in (500, 502, 504):
+            raise EcwUpstreamError(detail=f"eClinicalWorks patient listing upstream failure (HTTP {response.status_code}).")
+        if response.status_code == 503:
+            raise EcwServiceUnavailableError(detail="eClinicalWorks Patient list service is temporarily unavailable (503).")
+        if response.status_code != 200:
+            raise EcwUpstreamError(detail=f"eClinicalWorks Patient list returned unexpected status {response.status_code}.")
+
+        try:
+            bundle = response.json()
+        except Exception as exc:
+            raise EcwUpstreamError(detail="Malformed JSON returned from eCW Patient list.") from exc
+
+        if bundle.get("resourceType") != "Bundle":
+            raise EcwUpstreamError(detail="Expected FHIR searchset 'Bundle' from eCW Patient list.")
+
+        entries = bundle.get("entry", [])
+        items: List[PatientMatchSummary] = []
+        for entry in entries:
+            res = entry.get("resource")
+            if res and res.get("resourceType") == "Patient":
+                items.append(self._extract_patient_summary(res))
+
+        # Check for FHIR next page continuation link
+        links = bundle.get("link", [])
+        next_link: Optional[str] = None
+        for link_entry in links:
+            if link_entry.get("relation") == "next" and link_entry.get("url"):
+                next_link = link_entry["url"]
+                break
+
+        return PatientListResponse(
+            items=items,
+            count=len(items),
+            page_size=clamped_size,
+            next_page_token=next_link,
+            has_more=bool(next_link),
+            enumeration_note=(
+                "Patient listing is subject to practice tenant authorization and search window limits. "
+                "Standard FHIR REST queries do not guarantee global population enumeration without bulk $export."
+            ),
+        )
+
+    def _extract_patient_summary(self, resource: Dict[str, Any]) -> PatientMatchSummary:
+        """Extract minimal authorized identity summary fields for search matches and listing."""
+        patient_id = str(resource.get("id", "")).strip()
+
+        names = resource.get("name", [])
+        first_name: Optional[str] = None
+        last_name: Optional[str] = None
+        full_name = ""
+
+        if names:
+            chosen_name = next(
+                (n for n in names if n.get("use") in ("official", "usual")),
+                names[0]
+            )
+            last_name = chosen_name.get("family")
+            given = chosen_name.get("given", [])
+            first_name = " ".join(given).strip() if given else None
+
+            if chosen_name.get("text"):
+                full_name = chosen_name["text"].strip()
+            else:
+                parts = [p for p in [first_name, last_name] if p]
+                full_name = " ".join(parts).strip()
+
+        if not full_name:
+            full_name = f"Patient {patient_id}"
+
+        return PatientMatchSummary(
+            patient_id=patient_id,
+            first_name=first_name,
+            last_name=last_name,
+            full_name=full_name,
+            date_of_birth=resource.get("birthDate"),
+            active=resource.get("active", True),
+        )
 
     def extract_patient_demographics(self, resource: Dict[str, Any]) -> PatientDemographicsResponse:
         """Extract only authorized, minimum-necessary receptionist demographic fields.
@@ -527,7 +842,6 @@ class EcwClient:
         full_name = ""
 
         if names:
-            # Select official/usual name if present, else first
             chosen_name = next(
                 (n for n in names if n.get("use") in ("official", "usual")),
                 names[0]

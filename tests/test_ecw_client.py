@@ -8,10 +8,16 @@ from fastapi import HTTPException
 
 from app.core.config import Settings
 from app.core.jwks import KeyManager
-from app.models.patient import PatientDemographicsResponse, PatientSearchResponse
+from app.models.patient import (
+    PatientDemographicsResponse,
+    PatientListResponse,
+    PatientSearchMatchResponse,
+    PatientSearchResponse,
+)
 from app.services.ecw_client import (
     EcwClient,
     EcwAuthError,
+    EcwClientError,
     EcwPermissionError,
     EcwNotFoundError,
     EcwUpstreamError,
@@ -357,11 +363,11 @@ def test_get_patient_by_id_503_timeout(ecw_client_instance):
 
 
 # =====================================================================
-# Patient Search (GET /Patient) Tests
+# Targeted Name & DOB Search Unit Tests
 # =====================================================================
 
-def test_search_patients_success(ecw_client_instance):
-    """Test searching patients by US Core parameters."""
+def test_search_patient_by_name_dob_unit_single_match(ecw_client_instance):
+    """EcwClient.search_patient_by_name_dob returns single_match on 1 result."""
     ecw_client_instance._cached_token = "mock-token"
     ecw_client_instance._token_expires_at = time.time() + 300
 
@@ -373,10 +379,10 @@ def test_search_patients_success(ecw_client_instance):
             {
                 "resource": {
                     "resourceType": "Patient",
-                    "id": "PAT-777",
-                    "name": [{"family": "Williams", "given": ["Robert"]}],
-                    "birthDate": "1975-08-20",
-                    "gender": "male",
+                    "id": "1001",
+                    "name": [{"family": "Smith", "given": ["Alex"]}],
+                    "birthDate": "1985-06-15",
+                    "active": True,
                 }
             }
         ],
@@ -389,32 +395,94 @@ def test_search_patients_success(ecw_client_instance):
     )
 
     async def mock_get(url, params=None, **kwargs):
-        assert params.get("family") == "Williams"
-        assert params.get("birthdate") == "1975-08-20"
+        assert params.get("given") == "Alex"
+        assert params.get("family") == "Smith"
+        assert params.get("birthdate") == "1985-06-15"
         return mock_resp
 
     mock_client = MagicMock(spec=httpx.AsyncClient)
     mock_client.get = mock_get
     ecw_client_instance._custom_http_client = mock_client
 
-    result = asyncio.run(
-        ecw_client_instance.search_patients(
-            family="Williams",
-            birthdate="1975-08-20",
+    res = asyncio.run(
+        ecw_client_instance.search_patient_by_name_dob(
+            first_name="Alex",
+            last_name="Smith",
+            dob="1985-06-15",
         )
     )
 
-    assert isinstance(result, PatientSearchResponse)
-    assert result.total == 1
-    assert len(result.patients) == 1
-    assert result.patients[0].patient_id == "PAT-777"
-    assert result.patients[0].full_name == "Robert Williams"
+    assert isinstance(res, PatientSearchMatchResponse)
+    assert res.match_status == "single_match"
+    assert res.match_count == 1
+    assert res.patients[0].full_name == "Alex Smith"
+    assert res.patients[0].patient_id == "1001"
 
 
-def test_search_patients_empty_params_rejected(ecw_client_instance):
-    """Search without any query parameters must be rejected with 400 Bad Request."""
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(ecw_client_instance.search_patients())
+# =====================================================================
+# Paginated List Patients Unit Tests
+# =====================================================================
+
+def test_list_patients_unit_with_pagination(ecw_client_instance):
+    """EcwClient.list_patients parses entries and extracts next_page_token."""
+    ecw_client_instance._cached_token = "mock-token"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 2,
+        "link": [
+            {"relation": "self", "url": "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Patient?_count=2"},
+            {"relation": "next", "url": "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Patient?_count=2&page=2"},
+        ],
+        "entry": [
+            {"resource": {"resourceType": "Patient", "id": "1", "name": [{"family": "One"}]}},
+            {"resource": {"resourceType": "Patient", "id": "2", "name": [{"family": "Two"}]}},
+        ],
+    }
+
+    mock_resp = httpx.Response(
+        status_code=200,
+        json=bundle,
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Patient"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    res = asyncio.run(ecw_client_instance.list_patients(page_size=2))
+
+    assert isinstance(res, PatientListResponse)
+    assert res.count == 2
+    assert res.has_more is True
+    assert "page=2" in res.next_page_token
+
+
+def test_list_patients_unit_unsupported_population_wide_restriction(ecw_client_instance):
+    """EcwClient.list_patients raises EcwClientError 400 when eCW rejects unfiltered listing."""
+    ecw_client_instance._cached_token = "mock-token"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    mock_resp = httpx.Response(
+        status_code=400,
+        text='{"resourceType": "OperationOutcome", "issue": [{"diagnostics": "Search without search criteria is not supported for resource type Patient"}]}',
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Patient"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    with pytest.raises(EcwClientError) as exc_info:
+        asyncio.run(ecw_client_instance.list_patients(page_size=20))
 
     assert exc_info.value.status_code == 400
-    assert "At least one search parameter" in exc_info.value.detail
+    assert "restricts population-wide patient listing" in exc_info.value.detail
