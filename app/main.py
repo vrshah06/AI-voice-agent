@@ -11,7 +11,7 @@ from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
 from app.api.medications import router as medications_router
 from app.api.messages import router as messages_router
-from app.api.patient import router as patient_router
+from app.api.patients import router as patients_router
 from app.api.retell import router as retell_router
 from app.api.auth import router as auth_router
 from app.core.config import settings
@@ -29,30 +29,25 @@ async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info("Starting up %s (Env: %s)", settings.APP_NAME, settings.APP_ENV)
     logger.info("Clinic: %s | Hours: %s", settings.CLINIC_NAME, settings.CLINIC_HOURS)
-    logger.info("Safety Notice: Running in SYNTHETIC DEMO mode.")
     yield
     logger.info("Shutting down %s", settings.APP_NAME)
 
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="0.2.0",
+    version="0.3.0",
     description=(
         f"### {settings.CLINIC_NAME} AI Receptionist Backend\n\n"
-        "**CLINICAL PROTOTYPE DISCLAIMER:**\n"
-        "> This application uses purely synthetic demo data for demonstration purposes only. "
-        "> It does **not** connect to live Electronic Health Record (EHR) systems, real pharmacy networks, "
-        "> or emergency medical services. Identity is unverified, appointments are simulated, and "
-        "> no medication is dispensed or approved without human clinical review.\n\n"
         "**Core Capabilities:**\n"
         f"- 🩺 **Greeting & Triage**: Identify caller intent for {settings.CLINIC_NAME}.\n"
-        "- 👤 **Patient Identification**: Capture patient name and DOB (`identity_verified: false`).\n"
+        "- 👤 **Real eCW Patient Demographics**: Live EHR retrieval (`GET /api/patients/{patient_id}`) and search via SMART on FHIR.\n"
         "- 📅 **Appointment Availability & Booking**: In-memory scheduling with conflict prevention.\n"
         "- 🔄 **Reschedule & Cancellation**: Modify or cancel appointments with state release.\n"
         "- 💊 **Medication Refills**: Log refill requests for mandatory physician authorization.\n"
         "- ℹ️ **Clinic Knowledge Base**: Strictly approved answers on hours, location, insurance, etc.\n"
         "- 📝 **Take a Message**: Record caller messages for clinic physicians and staff.\n"
-        "- 🎙️ **Retell AI Adapter**: Dedicated endpoints with webhook authentication and safe error handling."
+        "- 🎙️ **Retell AI Adapter**: Dedicated endpoints with webhook authentication and safe error handling.\n"
+        "- 🔐 **eCW SMART JWKS & Auth Status**: Standards-compliant JWKS and configuration diagnostics."
     ),
     lifespan=lifespan,
     docs_url="/docs",
@@ -90,8 +85,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "status": "validation_error",
             "message": f"Validation failed: {primary_msg}",
             "errors": errors,
-            "is_demo_data": True,
-            "disclaimer": settings.DISCLAIMER,
         },
     )
 
@@ -99,15 +92,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Handle standard HTTP exceptions with consistent JSON formatting."""
+    content = {
+        "status": "error",
+        "message": exc.detail,
+        "status_code": exc.status_code,
+    }
+    if hasattr(exc, "blocker") and getattr(exc, "blocker"):
+        content["blocker"] = getattr(exc, "blocker")
+    if request.url.path.startswith("/api/retell") or request.url.path.startswith("/api/appointments"):
+        content["is_demo_data"] = True
+        content["disclaimer"] = settings.DISCLAIMER
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "status": "error",
-            "message": exc.detail,
-            "status_code": exc.status_code,
-            "is_demo_data": True,
-            "disclaimer": settings.DISCLAIMER,
-        },
+        content=content,
         headers=exc.headers,
     )
 
@@ -121,8 +118,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={
             "status": "internal_server_error",
             "message": "An unexpected server error occurred. Please try again later.",
-            "is_demo_data": True,
-            "disclaimer": settings.DISCLAIMER,
         },
     )
 
@@ -140,6 +135,8 @@ async def root_greeting():
         "phone": settings.CLINIC_PHONE,
         "hours": settings.CLINIC_HOURS,
         "intents_supported": [
+            "Retrieve patient demographics from eCW EHR",
+            "Search patients in eCW EHR",
             "Book an appointment",
             "Reschedule an appointment",
             "Cancel an appointment",
@@ -150,13 +147,12 @@ async def root_greeting():
         ],
         "documentation": "/docs",
         "health": "/health",
-        "disclaimer": settings.DISCLAIMER,
     }
 
 
 # Register Application Routers
 app.include_router(health_router)
-app.include_router(patient_router)
+app.include_router(patients_router)
 app.include_router(appointments_router)
 app.include_router(medications_router)
 app.include_router(knowledge_router)

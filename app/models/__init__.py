@@ -1,6 +1,17 @@
 """Models package export."""
 from app.models.common import BaseDemoResponse
-from app.models.patient import PatientIdentifyRequest, PatientIdentifyResponse
+from app.models.patient import (
+    PatientAddress,
+    PatientDemographicsResponse,
+    PatientIdentifyRequest,
+    PatientIdentifyResponse,
+    PatientInfoRequest,
+    PatientInfoResponse,
+    PatientListResponse,
+    PatientMatchSummary,
+    PatientSearchMatchResponse,
+    PatientSearchResponse,
+)
 from app.models.appointments import (
     AppointmentAvailabilityRequest,
     AppointmentAvailabilityResponse,
@@ -18,8 +29,16 @@ from app.models.retell import RetellWebhookRequest, RetellToolResponse
 
 __all__ = [
     "BaseDemoResponse",
+    "PatientAddress",
+    "PatientDemographicsResponse",
+    "PatientListResponse",
+    "PatientMatchSummary",
+    "PatientSearchMatchResponse",
+    "PatientSearchResponse",
     "PatientIdentifyRequest",
     "PatientIdentifyResponse",
+    "PatientInfoRequest",
+    "PatientInfoResponse",
     "AppointmentAvailabilityRequest",
     "AppointmentAvailabilityResponse",
     "AppointmentBookRequest",
