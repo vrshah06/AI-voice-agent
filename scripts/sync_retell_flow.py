@@ -18,34 +18,24 @@ load_dotenv()
 
 RETELL_API_KEY = os.getenv("RETELL_API_KEY", "key_0f293e950a9456f5d995f640ac81")
 WEBHOOK_SECRET_KEY = os.getenv("WEBHOOK_SECRET_KEY", "demo-clinic-secret-key-12345")
-CLINIC_NAME = os.getenv("CLINIC_NAME", "Md Primary Care INC.")
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "https://ai-voice-agent-jlez.onrender.com").rstrip("/")
+CLINIC_NAME = os.getenv("CLINIC_NAME", "Md Primary Care INC")
 CLINIC_PHONE = os.getenv("CLINIC_PHONE", "5612086041")
 CLINIC_HOURS = os.getenv("CLINIC_HOURS", "Monday to Friday, 8:00 AM to 5:00 PM EST")
 
 
-def get_current_tunnel_url():
-    try:
-        req = urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=2)
-        data = json.loads(req.read().decode())
-        tunnels = data.get("tunnels", [])
-        for t in tunnels:
-            if t.get("proto") == "https":
-                return t.get("public_url")
-        if tunnels:
-            return tunnels[0].get("public_url")
-    except Exception:
-        pass
-    return "https://omen-reassign-plausible.ngrok-free.dev"
-
-
-def sync_flow(tunnel_url=None):
-    if not RETELL_API_KEY:
-        print("ERROR: RETELL_API_KEY not found in .env")
+def sync_flow(target_url=None):
+    if not RETELL_API_KEY or not RETELL_API_KEY.strip():
+        print("[-] ERROR: RETELL_API_KEY environment variable is missing. Set it in .env or your environment.")
         sys.exit(1)
 
-    base_url = tunnel_url or get_current_tunnel_url()
-    print(f"[*] Using Webhook Base URL: {base_url}")
-    print(f"[*] Clinic: {CLINIC_NAME} | Phone: {CLINIC_PHONE}")
+    if not WEBHOOK_SECRET_KEY or not WEBHOOK_SECRET_KEY.strip():
+        print("[-] ERROR: WEBHOOK_SECRET_KEY environment variable is missing. Set it in .env or your environment.")
+        sys.exit(1)
+
+    base_url = (target_url or BACKEND_BASE_URL).rstrip("/")
+    print(f"[*] Connecting Retell AI Tools to Backend URL: {base_url}")
+    print(f"[*] Clinic Profile: {CLINIC_NAME} | Phone: {CLINIC_PHONE}")
 
     headers = {
         "Authorization": f"Bearer {RETELL_API_KEY}",
@@ -88,15 +78,17 @@ def sync_flow(tunnel_url=None):
             "type": "custom",
             "method": "POST",
             "url": f"{base_url}/api/retell/tools/identify_patient",
-            "description": f"Collects patient full name and date of birth to look up chart at {CLINIC_NAME}.",
+            "description": f"Verifies patient chart in {CLINIC_NAME} eClinicalWorks EHR using first name, last name, and date of birth.",
             "headers": {"X-Api-Key": WEBHOOK_SECRET_KEY},
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "patient_name": {"type": "string", "description": "Patient's full legal name"},
-                    "date_of_birth": {"type": "string", "description": "Patient's date of birth in YYYY-MM-DD format"}
+                    "first_name": {"type": "string", "description": "Patient's legal first name"},
+                    "last_name": {"type": "string", "description": "Patient's legal last name"},
+                    "patient_name": {"type": "string", "description": "Patient's full legal name (if first and last are combined)"},
+                    "date_of_birth": {"type": "string", "description": "Patient date of birth in YYYY-MM-DD or MM/DD/YYYY format"}
                 },
-                "required": ["patient_name", "date_of_birth"]
+                "required": ["date_of_birth"]
             },
             "speak_after_execution": True,
             "speak_during_execution": False,
@@ -275,9 +267,12 @@ def sync_flow(tunnel_url=None):
             n["tool_ids"] = ["tool-identify-patient"]
             n["instruction"] = {
                 "text": (
-                    f"Ask the caller for their full legal name and date of birth to look up their chart at {CLINIC_NAME}.\n"
-                    "As soon as they provide both, call the tool 'identify_patient' with patient_name and date_of_birth (YYYY-MM-DD).\n"
-                    "Once the tool responds, say: \"Thank you, [Patient Name]. I have verified your details in our system.\" and immediately proceed to help them with their request."
+                    f"Ask the caller for their full legal name (first and last name) and date of birth to look up their chart at {CLINIC_NAME}.\n"
+                    "As soon as they provide both, call the tool 'identify_patient' with first_name, last_name (or patient_name), and date_of_birth (YYYY-MM-DD).\n"
+                    "When the tool responds:\n"
+                    "- If verified: Read the confirmation message returned by the tool (e.g. 'Thank you, [Name]. I have verified your details in our system.') and immediately proceed to assist them.\n"
+                    "- If not found: Speak the message returned by the tool politely and ask them to verify the spelling or date of birth.\n"
+                    "- If multiple matches found: Inform the caller that for their privacy you will transfer them to the front desk receptionist."
                 ),
                 "type": "prompt"
             }

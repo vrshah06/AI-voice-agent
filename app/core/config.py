@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     # If set, incoming webhook calls to /api/retell/* must include matching X-Api-Key or Authorization header
     RETELL_API_KEY: str = "key_0f293e950a9456f5d995f640ac81"
     WEBHOOK_SECRET_KEY: str = "demo-clinic-secret-key-12345"
+    BACKEND_BASE_URL: str = "https://ai-voice-agent-jlez.onrender.com"
 
-    # Clinic Demo Profile
+    # Clinic Profile
     CLINIC_NAME: str = "Md Primary Care INC"
     CLINIC_PHONE: str = "(561) 208-6041"
     CLINIC_HOURS: str = "Monday to Friday, 8:00 AM to 5:00 PM EST"

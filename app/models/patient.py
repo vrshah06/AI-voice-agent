@@ -1,6 +1,6 @@
 """Patient data models for identification, lookup, and eCW FHIR retrieval."""
-from datetime import date
-from typing import List, Optional
+from datetime import date, datetime
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field, field_validator
 from app.models.common import BaseDemoResponse, validate_dob_not_future
 
@@ -151,53 +151,106 @@ class PatientListResponse(BaseModel):
 
 class PatientIdentifyRequest(BaseModel):
     """Payload to identify a patient by name and date of birth."""
-    patient_name: str = Field(
-        ...,
-        min_length=2,
+    patient_name: Optional[str] = Field(
+        default=None,
+        min_length=1,
         max_length=100,
-        description="Full legal name of the patient.",
-        examples=["Eleanor Vance"]
+        description="Full legal name of the patient (e.g. Kokila Shah).",
+        examples=["Kokila Shah"]
     )
-    date_of_birth: date = Field(
+    first_name: Optional[str] = Field(
+        default=None,
+        description="Patient legal first / given name.",
+        examples=["Kokila"]
+    )
+    last_name: Optional[str] = Field(
+        default=None,
+        description="Patient legal last / family name.",
+        examples=["Shah"]
+    )
+    date_of_birth: Any = Field(
         ...,
-        description="Patient date of birth in YYYY-MM-DD format.",
-        examples=["1985-04-12"]
+        description="Patient date of birth in YYYY-MM-DD format (or date object).",
+        examples=["1951-08-27"]
     )
 
-    @field_validator("patient_name")
+    @field_validator("date_of_birth", mode="before")
     @classmethod
-    def clean_name(cls, v: str) -> str:
-        cleaned = v.strip()
-        if not cleaned:
-            raise ValueError("Patient name cannot be blank or whitespace.")
-        return cleaned
+    def parse_dob(cls, v: Any) -> date:
+        if isinstance(v, date):
+            return validate_dob_not_future(v)
+        if isinstance(v, str):
+            clean_str = v.strip()
+            # Try YYYY-MM-DD
+            try:
+                parsed = datetime.strptime(clean_str, "%Y-%m-%d").date()
+                return validate_dob_not_future(parsed)
+            except ValueError:
+                pass
+            # Try MM/DD/YYYY
+            try:
+                parsed = datetime.strptime(clean_str, "%m/%d/%Y").date()
+                return validate_dob_not_future(parsed)
+            except ValueError:
+                pass
+            # Try standard date.fromisoformat
+            try:
+                parsed = date.fromisoformat(clean_str)
+                return validate_dob_not_future(parsed)
+            except ValueError:
+                raise ValueError(f"Invalid date of birth format: '{clean_str}'. Expected format is YYYY-MM-DD.")
+        raise ValueError("Date of birth must be a valid date or YYYY-MM-DD string.")
 
-    @field_validator("date_of_birth")
-    @classmethod
-    def validate_dob(cls, v: date) -> date:
-        return validate_dob_not_future(v)
+    def get_names(self) -> tuple[str, str, str]:
+        """Returns normalized (first_name, last_name, full_name)."""
+        f = (self.first_name or "").strip()
+        l = (self.last_name or "").strip()
+        full = (self.patient_name or "").strip()
+
+        if f and l:
+            return f, l, f"{f} {l}"
+        if full:
+            parts = full.split(None, 1)
+            first = parts[0]
+            last = parts[1] if len(parts) > 1 else ""
+            return first, last, full
+        if f:
+            return f, "", f
+        if l:
+            return "", l, l
+        raise ValueError("Either patient_name, or both first_name and last_name must be provided.")
 
 
-class PatientIdentifyResponse(BaseDemoResponse):
-    """Structured response for patient identification."""
+class PatientIdentifyResponse(BaseModel):
+    """Structured response for patient identification and verification."""
     status: str = Field(
         default="identified",
-        description="Status of the lookup (e.g., identified, synthetic_match, new_demo_record)."
+        description="Status of the lookup (verified_patient, not_found, multiple_matches, error)."
     )
     patient_id: str = Field(
-        ...,
-        description="Simulated patient chart identifier.",
-        examples=["PAT-DEMO-001"]
+        default="",
+        description="eCW patient chart identifier.",
+        examples=["12345"]
     )
-    patient_name: str = Field(..., description="Echoed normalized patient name.")
+    patient_name: str = Field(..., description="Normalized patient full legal name.")
+    first_name: Optional[str] = Field(default=None, description="Patient first name.")
+    last_name: Optional[str] = Field(default=None, description="Patient last name.")
     date_of_birth: str = Field(..., description="Date of birth formatted as YYYY-MM-DD.")
     identity_verified: bool = Field(
         default=False,
-        description="Explicit flag confirming identity has NOT been authenticated via government ID or OTP."
+        description="Whether a matching active chart was confirmed in EHR."
+    )
+    match_status: Optional[str] = Field(
+        default=None,
+        description="FHIR search match status ('single_match', 'no_match', 'multiple_matches')."
     )
     message: str = Field(
         ...,
         description="Spoken confirmation message suitable for the voice agent to read."
+    )
+    is_demo_data: bool = Field(
+        default=False,
+        description="Whether this result originates from synthetic demo data."
     )
 
 

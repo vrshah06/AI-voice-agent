@@ -237,5 +237,153 @@ def test_retell_submit_refill_request_alias(client: TestClient, auth_headers: di
     )
     assert res.status_code == 200
     assert res.json()["status"] == "success"
-    assert "REF-DEMO-" in res.json()["data"]["refill_reference"]
+    assert "REF-" in res.json()["data"]["refill_reference"]
+
+
+def test_retell_identify_patient_live_ecw_single_match(client: TestClient, auth_headers: dict):
+    """Test Retell identify_patient calling live eCW patient search with a single match."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+
+    mock_match = PatientSearchMatchResponse(
+        match_status="single_match",
+        match_count=1,
+        patients=[
+            PatientMatchSummary(
+                patient_id="ECW-9988",
+                first_name="Kokila",
+                last_name="Shah",
+                full_name="Kokila Shah",
+                date_of_birth="1951-08-27",
+                active=True,
+            )
+        ],
+        identity_verification_required=True,
+        notice="Single match confirmed.",
+    )
+
+    with patch.object(settings, "ECW_ENABLED", True), \
+         patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = mock_match
+
+        res = client.post(
+            "/api/retell/tools/identify_patient",
+            json={
+                "first_name": "Kokila",
+                "last_name": "Shah",
+                "date_of_birth": "1951-08-27",
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["data"]["identity_verified"] is True
+        assert data["data"]["patient_id"] == "ECW-9988"
+        assert "Kokila" in data["message"]
+        mock_search.assert_awaited_once_with(first_name="Kokila", last_name="Shah", dob="1951-08-27")
+
+
+def test_retell_identify_patient_live_ecw_no_match(client: TestClient, auth_headers: dict):
+    """Test Retell identify_patient when eCW finds zero candidate matches."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientSearchMatchResponse
+
+    mock_no_match = PatientSearchMatchResponse(
+        match_status="no_match",
+        match_count=0,
+        patients=[],
+        identity_verification_required=True,
+        notice="No match.",
+    )
+
+    with patch.object(settings, "ECW_ENABLED", True), \
+         patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = mock_no_match
+
+        res = client.post(
+            "/api/retell/tools/identify_patient",
+            json={
+                "patient_name": "Unknown Person",
+                "date_of_birth": "1990-01-01",
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["data"]["identity_verified"] is False
+        assert data["data"]["match_status"] == "no_match"
+        assert "could not locate an active chart" in data["message"]
+
+
+def test_retell_identify_patient_live_ecw_multiple_matches(client: TestClient, auth_headers: dict):
+    """Test Retell identify_patient when eCW finds multiple candidate matches."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+
+    mock_multi = PatientSearchMatchResponse(
+        match_status="multiple_matches",
+        match_count=2,
+        patients=[
+            PatientMatchSummary(patient_id="1", first_name="John", last_name="Doe", full_name="John Doe", date_of_birth="1980-01-01", active=True),
+            PatientMatchSummary(patient_id="2", first_name="John", last_name="Doe", full_name="John Doe", date_of_birth="1980-01-01", active=True),
+        ],
+        identity_verification_required=True,
+        notice="Multiple matches.",
+    )
+
+    with patch.object(settings, "ECW_ENABLED", True), \
+         patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = mock_multi
+
+        res = client.post(
+            "/api/retell/tools/identify_patient",
+            json={
+                "patient_name": "John Doe",
+                "date_of_birth": "1980-01-01",
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["data"]["identity_verified"] is False
+        assert data["data"]["match_status"] == "multiple_matches"
+        assert "transfer you to our receptionist" in data["message"]
+
+
+def test_retell_identify_patient_date_normalization(client: TestClient, auth_headers: dict):
+    """Test that MM/DD/YYYY format is correctly normalized to YYYY-MM-DD."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+
+    mock_match = PatientSearchMatchResponse(
+        match_status="single_match",
+        match_count=1,
+        patients=[
+            PatientMatchSummary(patient_id="101", first_name="Sarah", last_name="Connor", full_name="Sarah Connor", date_of_birth="1965-02-28", active=True)
+        ],
+        identity_verification_required=True,
+        notice="Match.",
+    )
+
+    with patch.object(settings, "ECW_ENABLED", True), \
+         patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = mock_match
+
+        res = client.post(
+            "/api/retell/tools/identify_patient",
+            json={
+                "patient_name": "Sarah Connor",
+                "date_of_birth": "02/28/1965",  # MM/DD/YYYY format
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["data"]["date_of_birth"] == "1965-02-28"
+        mock_search.assert_awaited_once_with(first_name="Sarah", last_name="Connor", dob="1965-02-28")
 

@@ -36,17 +36,17 @@ router = APIRouter(
 )
 
 
-def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
+async def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
     """Internal dispatcher for all Retell AI tools."""
     normalized_name = tool_name.strip().lower()
 
     try:
-        # 1. Identify / Verify Patient
+        # 1. Identify / Verify Patient (Live eCW FHIR lookup)
         if normalized_name in ["identify_patient", "patient_identify", "verify_patient"]:
             req = PatientIdentifyRequest(**args)
-            result = patient_service.identify_patient(req)
+            result = await patient_service.identify_patient(req)
             return RetellToolResponse(
-                status="success",
+                status="success" if result.identity_verified else (result.status or "success"),
                 message=result.message,
                 data=result.model_dump(),
             )
@@ -54,7 +54,7 @@ def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
         # 1b. Get Patient Information (Post-Verification)
         elif normalized_name in ["get_patient_information", "get_patient_info", "patient_info", "lookup_patient"]:
             req = PatientInfoRequest(**args)
-            info_result = patient_service.get_patient_information(req)
+            info_result = await patient_service.get_patient_information(req)
             return RetellToolResponse(
                 status=info_result.get("status", "success"),
                 message=info_result["message"],
@@ -209,7 +209,7 @@ async def handle_retell_webhook(raw_request: Request) -> RetellToolResponse:
             error="Missing 'name' field in payload or 'tool_name' query param.",
         )
 
-    return _dispatch_tool(tool_name, args)
+    return await _dispatch_tool(tool_name, args)
 
 
 @router.post(
@@ -231,4 +231,4 @@ async def handle_named_retell_tool(tool_name: str, raw_request: Request) -> Rete
     else:
         args = body if isinstance(body, dict) else {}
 
-    return _dispatch_tool(tool_name, args)
+    return await _dispatch_tool(tool_name, args)
