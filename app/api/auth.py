@@ -79,7 +79,21 @@ async def get_ecw_auth_status(request: Request) -> Any:
         "token_url": settings.ECW_TOKEN_URL,
         "fhir_base_url_configured": bool(settings.ECW_FHIR_BASE_URL),
         "scopes": settings.ECW_SCOPES,
-        "registration_type": "Backend App (Backend Services)",
+        "registration_type": "Provider App (Backend Services)",
         "oauth_grant_type": "client_credentials",
         "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        "patient_app": {
+            "client_id_configured": bool(settings.ECW_PATIENT_CLIENT_ID),
+            "client_secret_configured": bool(settings.ECW_PATIENT_CLIENT_SECRET),
+            "redirect_uri": settings.ECW_PATIENT_REDIRECT_URI,
+            "authorize_url": settings.ECW_PATIENT_AUTHORIZE_URL,
+            "token_url": settings.ECW_PATIENT_TOKEN_URL,
+            "practice_code": settings.ECW_PATIENT_PRACTICE_CODE,
+            "scopes": settings.ECW_PATIENT_SCOPES,
+            "pkce_enabled": True,
+            "code_challenge_method": "S256",
+            "initiate_endpoint": f"{base_url}/api/ecw/patient/authorize",
+            "callback_endpoint": f"{base_url}/api/ecw/callback",
+        },
     }
+

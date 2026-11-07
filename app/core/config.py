@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     ECW_SCOPES: str = "system/Patient.read"
     ECW_ASSERTION_EXPIRY_SECONDS: int = 300
 
+    # =========================================================================
+    # eClinicalWorks Patient App OAuth 2.0 Configuration (Authorization Code)
+    # =========================================================================
+    ECW_PATIENT_CLIENT_ID: str = ""
+    ECW_PATIENT_CLIENT_SECRET: str = ""
+    ECW_PATIENT_REDIRECT_URI: str = "https://ai-voice-agent-jlez.onrender.com/api/ecw/callback"
+    ECW_PATIENT_AUTHORIZE_URL: str = "https://oauthserver.eclinicalworks.com/oauth/oauth2/authorize"
+    ECW_PATIENT_TOKEN_URL: str = "https://oauthserver.eclinicalworks.com/oauth/oauth2/token"
+    ECW_PATIENT_PRACTICE_CODE: str = "BDGDCD"
+    ECW_PATIENT_SCOPES: str = "openid patient/*.read"
+
+
 
     model_config = SettingsConfigDict(
         env_file=".env",

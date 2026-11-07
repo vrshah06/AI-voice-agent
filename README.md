@@ -13,8 +13,12 @@ A modular virtual receptionist voice and EHR integration backend built with **Py
 | `GET /api/patients/search` | `GET` | **eCW Name & DOB Search**: Targeted patient search by `first_name`, `last_name`, and `dob` (YYYY-MM-DD) via official US Core parameters. |
 | `GET /api/patients` | `GET` | **eCW Patient Directory (Paginated)**: Retrieves accessible patient records from eCW with continuation tokens. Requires API key or Bearer token authorization. |
 | `GET /api/patients/{patient_id}` | `GET` | **eCW Patient Demographics by ID**: Retrieves authorized patient demographic details by FHIR ID. |
+| `GET /api/ecw/patient/authorize` | `GET` | **Patient App OAuth Authorization**: Initiates authorization code flow with RFC 7636 PKCE (S256) and state. |
+| `GET /api/ecw/callback` | `GET` | **Patient App OAuth Callback**: Validates state (anti-replay), exchanges code for tokens, and stores securely. |
+| `GET /api/ecw/patient/token-status` | `GET` | **Patient App Token Status**: Returns safe metadata on token validity and scopes without exposing secrets. |
 | `/.well-known/jwks.json` | `GET`, `HEAD` | **RFC 7517 JWKS Endpoint**: Public RSA signing key (`alg: RS384`, `kid`) for eCW OAuth authorization server. |
 | `/api/auth/ecw-status` | `GET` | **eCW Auth Diagnostics**: Public metadata, readiness, and registration status for SMART Backend Services. |
+
 | `/health` | `GET` | Server health check and system uptime. |
 | `/` | `GET` | Clinic greeting, hours, phone, and supported service intents. |
 | `/api/appointments/availability` | `POST` | Check appointment slot availability for Dr. Chintan Shah. |

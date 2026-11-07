@@ -15,6 +15,18 @@ from app.services.ecw_client import (
     EcwServiceUnavailableError,
 )
 
+from app.services.ecw_token_store import (
+    ecw_patient_state_store,
+    ecw_patient_token_store,
+    generate_pkce_pair,
+    OAuthStateStore,
+    OAuthTokenStore,
+)
+from app.services.ecw_patient_auth import (
+    ecw_patient_auth_service,
+    EcwPatientAuthService,
+)
+
 __all__ = [
     "patient_service",
     "PatientService",
@@ -34,4 +46,11 @@ __all__ = [
     "EcwNotFoundError",
     "EcwUpstreamError",
     "EcwServiceUnavailableError",
+    "ecw_patient_state_store",
+    "ecw_patient_token_store",
+    "generate_pkce_pair",
+    "OAuthStateStore",
+    "OAuthTokenStore",
+    "ecw_patient_auth_service",
+    "EcwPatientAuthService",
 ]

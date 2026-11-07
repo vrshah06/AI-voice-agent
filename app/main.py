@@ -14,6 +14,7 @@ from app.api.messages import router as messages_router
 from app.api.patients import router as patients_router
 from app.api.retell import router as retell_router
 from app.api.auth import router as auth_router
+from app.api.ecw_oauth import router as ecw_oauth_router
 from app.core.config import settings
 
 # Configure basic logging
@@ -159,3 +160,4 @@ app.include_router(knowledge_router)
 app.include_router(messages_router)
 app.include_router(retell_router)
 app.include_router(auth_router)
+app.include_router(ecw_oauth_router)
