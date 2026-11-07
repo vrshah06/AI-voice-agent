@@ -1,5 +1,6 @@
 """Appointment API routes for availability querying, booking, rescheduling, and cancellation."""
-from fastapi import APIRouter, status
+from typing import Any, Dict, Optional
+from fastapi import APIRouter, Query, status
 from app.models.appointments import (
     AppointmentAvailabilityRequest,
     AppointmentAvailabilityResponse,
@@ -11,6 +12,7 @@ from app.models.appointments import (
     AppointmentRescheduleResponse,
 )
 from app.services.appointment_service import appointment_service
+from app.services.ecw_client import ecw_client
 
 router = APIRouter(prefix="/api/appointments", tags=["Appointments"])
 
@@ -70,3 +72,23 @@ async def reschedule_appointment(payload: AppointmentRescheduleRequest) -> Appoi
 async def cancel_appointment(payload: AppointmentCancelRequest) -> AppointmentCancelResponse:
     """Cancel an existing appointment."""
     return appointment_service.cancel_appointment(payload)
+
+
+@router.get(
+    "/ecw/test-scheduling",
+    status_code=status.HTTP_200_OK,
+    summary="Test eCW Provider App Scheduling API Access",
+    description=(
+        "Reuses existing Provider App Backend Services authentication (RFC 7523 private-key JWT) "
+        "to acquire/verify access token and test connectivity to eCW FHIR Scheduling resources (Slot, Appointment, Schedule).\n\n"
+        "Performs scope diagnosis and tests official eCW FHIR scheduling endpoint without exposing tokens or credentials."
+    ),
+    tags=["Appointments", "eCW Provider Scheduling"],
+)
+async def test_ecw_scheduling(
+    resource: str = Query("Slot", description="FHIR Scheduling resource: Slot, Appointment, or Schedule"),
+    count: int = Query(5, ge=1, le=50, description="Max records to probe in FHIR bundle"),
+) -> Dict[str, Any]:
+    """Test eCW FHIR Scheduling resource access using the Provider App access token."""
+    return await ecw_client.test_scheduling_access(resource=resource, query_params={"_count": str(count)})
+

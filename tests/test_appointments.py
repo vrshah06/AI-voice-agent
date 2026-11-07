@@ -264,3 +264,68 @@ def test_appointment_booking_invalid_time_format(client: TestClient):
     response = client.post("/api/appointments/book", json=payload)
     assert response.status_code == 422
     assert "Invalid time format" in response.text
+
+
+def test_test_ecw_scheduling_endpoint_routes(client: TestClient):
+    """Verify both /api/appointments/ecw/test-scheduling and alias /api/ecw/scheduling/test are accessible."""
+    from unittest.mock import AsyncMock, patch
+
+    mock_report = {
+        "status": "scope_restricted",
+        "authenticated": True,
+        "provider_app": {
+            "client_id_preview": "test-c...xyz",
+            "key_id": "ecw-key-1",
+            "configured_scopes": "system/Patient.read",
+            "has_scheduling_scope_configured": False,
+        },
+        "scheduling_probe": {
+            "resource": "Slot",
+            "http_status": 403,
+            "outcome": "forbidden_scope_or_practice_restriction",
+        },
+        "scope_analysis": {
+            "configured_scopes": "system/Patient.read",
+            "grants_scheduling": False,
+        },
+    }
+
+    with patch("app.services.ecw_client.ecw_client.test_scheduling_access", new_callable=AsyncMock) as mock_probe:
+        mock_probe.return_value = mock_report
+
+        # Test primary route
+        resp1 = client.get("/api/appointments/ecw/test-scheduling?resource=Slot")
+        assert resp1.status_code == 200
+        assert resp1.json()["status"] == "scope_restricted"
+        assert resp1.json()["scheduling_probe"]["resource"] == "Slot"
+
+        # Test alias route
+        resp2 = client.get("/api/ecw/scheduling/test?resource=Slot")
+        assert resp2.status_code == 200
+        assert resp2.json()["status"] == "scope_restricted"
+
+
+def test_get_provider_token_status_endpoint(client: TestClient):
+    """Verify GET /api/ecw/provider/token-status returns safe token cache metadata."""
+    from unittest.mock import AsyncMock, patch
+
+    mock_status = {
+        "is_cached": True,
+        "is_valid": True,
+        "expires_in_seconds": 250,
+        "token_type": "Bearer",
+        "configured_scopes": "system/Patient.read",
+        "client_id_preview": "b_Zpwo...5xVs",
+        "key_id": "ecw-key-1",
+        "token_url": "https://oauthserver.eclinicalworks.com/oauth/oauth2/token",
+    }
+
+    with patch("app.services.ecw_client.ecw_client.get_provider_token_cache_status", new_callable=AsyncMock) as mock_stat:
+        mock_stat.return_value = mock_status
+        resp = client.get("/api/ecw/provider/token-status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["is_cached"] is True
+        assert data["token_type"] == "Bearer"
+        assert "access_token" not in data
+

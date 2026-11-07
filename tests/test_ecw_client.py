@@ -486,3 +486,93 @@ def test_list_patients_unit_unsupported_population_wide_restriction(ecw_client_i
 
     assert exc_info.value.status_code == 400
     assert "restricts population-wide patient listing" in exc_info.value.detail
+
+
+# =====================================================================
+# Provider App Token Caching & Scheduling Access Tests
+# =====================================================================
+
+def test_get_provider_access_token_caching(ecw_client_instance):
+    """get_provider_access_token reuses cached token when valid and reacquires when expired."""
+    ecw_client_instance._cached_token = "cached_provider_token_123"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    token = asyncio.run(ecw_client_instance.get_provider_access_token())
+    assert token == "cached_provider_token_123"
+
+    # Status check
+    status_info = asyncio.run(ecw_client_instance.get_provider_token_cache_status())
+    assert status_info["is_cached"] is True
+    assert status_info["is_valid"] is True
+    assert status_info["token_type"] == "Bearer"
+    assert "cached_provider_token_123" not in str(status_info)
+
+
+def test_test_scheduling_access_scope_restricted(ecw_client_instance):
+    """test_scheduling_access analyzes system/Patient.read and detects 403 forbidden."""
+    ecw_client_instance._cached_token = "mock-token-abc"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    mock_resp = httpx.Response(
+        status_code=403,
+        text='{"resourceType": "OperationOutcome", "issue": [{"severity": "error", "code": "forbidden", "diagnostics": "Access denied"}]}',
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Slot"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    report = asyncio.run(ecw_client_instance.test_scheduling_access(resource="Slot"))
+
+    assert report["status"] == "scope_restricted"
+    assert report["authenticated"] is True
+    assert report["scope_analysis"]["grants_scheduling"] is False
+    assert "system/Slot.read" in report["scope_analysis"]["scheduling_requirements"]
+    assert report["scheduling_probe"]["http_status"] == 403
+    assert "mock-token-abc" not in str(report)
+
+
+def test_test_scheduling_access_success(ecw_client_instance):
+    """test_scheduling_access parses 200 OK bundle summary without exposing tokens or PHI."""
+    ecw_client_instance._cached_token = "mock-token-abc"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    mock_resp = httpx.Response(
+        status_code=200,
+        json={
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "total": 3,
+            "entry": [{"resource": {"resourceType": "Slot", "id": "slot-1"}}],
+        },
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Slot"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    report = asyncio.run(ecw_client_instance.test_scheduling_access(resource="Slot"))
+
+    assert report["status"] == "success"
+    assert report["scheduling_probe"]["outcome"] == "authorized"
+    assert report["scheduling_probe"]["bundle_summary"]["total"] == 3
+    assert report["scheduling_probe"]["bundle_summary"]["entry_count"] == 1
+    assert "mock-token-abc" not in str(report)
+
+
+def test_test_scheduling_access_invalid_resource(ecw_client_instance):
+    """test_scheduling_access rejects unsupported resources with 400 Bad Request."""
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(ecw_client_instance.test_scheduling_access(resource="InvalidResource"))
+
+    assert exc_info.value.status_code == 400
+    assert "Allowed resources" in exc_info.value.detail
+

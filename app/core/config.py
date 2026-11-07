@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # =========================================================================
     # eClinicalWorks Patient App OAuth 2.0 Configuration (Authorization Code)
     # =========================================================================
-    ECW_PATIENT_CLIENT_ID: str = ""
+    ECW_PATIENT_CLIENT_ID: str = "HtxK7mTf5TkC-KEuf_UaZg3alS4wRkl071N5LsAIId0"
     ECW_PATIENT_CLIENT_SECRET: str = ""
     ECW_PATIENT_REDIRECT_URI: str = "https://ai-voice-agent-jlez.onrender.com/api/ecw/callback"
     ECW_PATIENT_AUTHORIZE_URL: str = "https://oauthserver.eclinicalworks.com/oauth/oauth2/authorize"

@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.core.config import settings
+from app.services.ecw_client import ecw_client
 from app.services.ecw_patient_auth import ecw_patient_auth_service
 from app.services.ecw_token_store import (
     ecw_patient_state_store,
@@ -272,6 +273,35 @@ async def get_patient_token_status() -> Dict[str, Any]:
     status_info["practice_code"] = settings.ECW_PATIENT_PRACTICE_CODE
     status_info["pending_auth_states"] = ecw_patient_state_store.count()
     return status_info
+
+
+@router.get(
+    "/provider/token-status",
+    summary="Provider App Token Cache Status",
+    description="Returns safe metadata about the cached Provider App Backend Services access token without exposing secrets.",
+    tags=["eCW Provider Scheduling"],
+)
+async def get_provider_token_status() -> Dict[str, Any]:
+    """Return safe metadata of cached Provider App token."""
+    return await ecw_client.get_provider_token_cache_status()
+
+
+@router.get(
+    "/scheduling/test",
+    summary="Test eCW Provider App Scheduling API Access",
+    description=(
+        "Reuses existing Provider App Backend Services authentication (RFC 7523 private-key JWT) "
+        "to acquire/verify access token and probe connectivity to eCW FHIR Scheduling resources (Slot, Appointment, Schedule).\n\n"
+        "Performs scope diagnosis and tests official eCW FHIR scheduling endpoint without exposing tokens or credentials."
+    ),
+    tags=["eCW Provider Scheduling"],
+)
+async def test_ecw_scheduling_alias(
+    resource: str = Query("Slot", description="FHIR Scheduling resource: Slot, Appointment, or Schedule"),
+    count: int = Query(5, ge=1, le=50, description="Max records to probe in FHIR bundle"),
+) -> Dict[str, Any]:
+    """Test eCW FHIR Scheduling resource access using the Provider App access token."""
+    return await ecw_client.test_scheduling_access(resource=resource, query_params={"_count": str(count)})
 
 
 @router.post(

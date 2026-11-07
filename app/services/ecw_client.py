@@ -300,6 +300,197 @@ class EcwClient:
             logger.info("Successfully acquired eCW access token (expires in %d seconds)", expires_in)
             return self._cached_token
 
+    async def get_provider_access_token(self, force_refresh: bool = False) -> str:
+        """Secure internal function to retrieve and cache the Provider App access token.
+
+        Reuses SMART Backend Services authentication (RFC 7523) with RS384 private-key JWT.
+        Caches token in-memory with a 30-second expiration safety margin, reacquiring when necessary.
+        """
+        return await self.get_access_token(force_refresh=force_refresh)
+
+    async def get_provider_token_cache_status(self) -> Dict[str, Any]:
+        """Return safe diagnostic metadata of the cached Provider App token without exposing secrets."""
+        async with self._token_lock:
+            now = time.time()
+            is_valid = bool(self._cached_token and now < (self._token_expires_at - 30))
+            remaining = max(0, int(self._token_expires_at - now)) if self._token_expires_at else 0
+            cid = self._settings.ECW_CLIENT_ID or ""
+            return {
+                "is_cached": bool(self._cached_token),
+                "is_valid": is_valid,
+                "expires_in_seconds": remaining,
+                "token_type": "Bearer",
+                "configured_scopes": self._settings.ECW_SCOPES,
+                "client_id_preview": (
+                    f"{cid[:6]}...{cid[-4:]}" if len(cid) > 10 else (cid or "NOT_CONFIGURED")
+                ),
+                "key_id": self._key_manager.key_id,
+                "token_url": self._settings.ECW_TOKEN_URL,
+            }
+
+    async def test_scheduling_access(
+        self,
+        resource: str = "Slot",
+        query_params: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Test whether the Provider App token can access an approved eCW FHIR Scheduling API endpoint.
+
+        Inspects approved scopes and probes the specified FHIR scheduling resource (Slot, Appointment, Schedule).
+        Never exposes the actual access token, private key, or client assertion.
+        """
+        self._check_configuration()
+
+        # Validate resource name
+        valid_resources = {"Slot", "Appointment", "Schedule"}
+        target_resource = resource.strip().capitalize() if resource else "Slot"
+        if target_resource not in valid_resources:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scheduling resource '{resource}'. Allowed resources: {', '.join(sorted(valid_resources))}.",
+            )
+
+        # 1. Inspect configured scopes vs official eCW FHIR Scheduling requirements
+        configured_scopes = self._settings.ECW_SCOPES or ""
+        scope_tokens = [s.strip() for s in configured_scopes.split()]
+
+        has_slot_read = any(s in ("system/Slot.read", "system/Slot.*", "system/*.read", "*") for s in scope_tokens)
+        has_appt_read = any(s in ("system/Appointment.read", "system/Appointment.*", "system/*.read", "*") for s in scope_tokens)
+        has_schedule_read = any(s in ("system/Schedule.read", "system/Schedule.*", "system/*.read", "*") for s in scope_tokens)
+
+        resource_scope_map = {
+            "Slot": has_slot_read,
+            "Appointment": has_appt_read,
+            "Schedule": has_schedule_read,
+        }
+        has_required_scope = resource_scope_map.get(target_resource, False)
+
+        # 2. Acquire or retrieve cached Provider App access token
+        token = await self.get_access_token()
+        base_url = self._get_fhir_base_url()
+        probe_url = f"{base_url}/{target_resource}"
+
+        # Default query params: count=5 for read probes
+        params = query_params or {"_count": "5"}
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/fhir+json",
+        }
+
+        logger.info(
+            "Probing eCW FHIR Scheduling resource '%s' at %s (scopes: '%s')",
+            target_resource,
+            probe_url,
+            configured_scopes,
+        )
+
+        client = self._get_http_client()
+        try:
+            response = await client.get(probe_url, params=params, headers=headers)
+
+            # Auto-retry once on 401 with refreshed token
+            if response.status_code == 401:
+                logger.warning("eCW FHIR returned 401 on scheduling probe. Refreshing token and retrying...")
+                fresh_token = await self.get_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {fresh_token}"
+                response = await client.get(probe_url, params=params, headers=headers)
+        except httpx.TimeoutException as exc:
+            logger.error("Timeout probing eCW FHIR Scheduling endpoint: %s", exc)
+            return {
+                "status": "error",
+                "authenticated": True,
+                "error": "Connection timed out while reaching eClinicalWorks FHIR Scheduling endpoint.",
+                "probe": {
+                    "resource": target_resource,
+                    "url": probe_url,
+                    "outcome": "timeout",
+                },
+            }
+        except httpx.RequestError as exc:
+            logger.error("Network error probing eCW FHIR Scheduling endpoint: %s", exc)
+            return {
+                "status": "error",
+                "authenticated": True,
+                "error": f"Network communication failure reaching eCW FHIR server: {exc}",
+                "probe": {
+                    "resource": target_resource,
+                    "url": probe_url,
+                    "outcome": "network_failure",
+                },
+            }
+        finally:
+            if self._custom_http_client is None:
+                await client.aclose()
+
+        # 3. Analyze response safely without disclosing tokens or PHI
+        resp_status = response.status_code
+        cid = self._settings.ECW_CLIENT_ID or ""
+        cid_preview = f"{cid[:6]}...{cid[-4:]}" if len(cid) > 10 else (cid or "NOT_CONFIGURED")
+
+        result = {
+            "status": "success" if resp_status == 200 else ("scope_restricted" if resp_status == 403 else "unexpected_status"),
+            "authenticated": True,
+            "provider_app": {
+                "client_id_preview": cid_preview,
+                "key_id": self._key_manager.key_id,
+                "token_url": self._settings.ECW_TOKEN_URL,
+                "fhir_base_url": base_url,
+                "configured_scopes": configured_scopes,
+                "has_scheduling_scope_configured": has_required_scope,
+            },
+            "scheduling_probe": {
+                "resource": target_resource,
+                "url": probe_url,
+                "http_status": resp_status,
+            },
+            "scope_analysis": {
+                "configured_scopes": configured_scopes,
+                "grants_scheduling": has_required_scope,
+                "scheduling_requirements": (
+                    "eCW FHIR Scheduling API requires 'system/Slot.read' for slot search, "
+                    "'system/Appointment.read' / 'system/Appointment.write' for appointments, and 'system/Schedule.read' for schedules. "
+                    f"Configured scope '{configured_scopes}' does not grant {target_resource} access."
+                    if not has_required_scope
+                    else f"Scope '{configured_scopes}' includes required access for {target_resource}."
+                ),
+                "remediation": (
+                    f"To enable {target_resource} access, request 'system/{target_resource}.read' (or 'system/Appointment.write') "
+                    "in the eCW Developer Portal for this Provider App registration, activate it with the practice, "
+                    "and update ECW_SCOPES in your environment variables."
+                    if not has_required_scope
+                    else "Scheduling scope is present in configuration."
+                ),
+            },
+        }
+
+        if resp_status == 200:
+            try:
+                bundle = response.json()
+                result["scheduling_probe"]["outcome"] = "authorized"
+                result["scheduling_probe"]["bundle_summary"] = {
+                    "resourceType": bundle.get("resourceType"),
+                    "total": bundle.get("total"),
+                    "entry_count": len(bundle.get("entry", [])),
+                }
+            except Exception:
+                result["scheduling_probe"]["outcome"] = "authorized_non_json"
+        elif resp_status == 403:
+            result["scheduling_probe"]["outcome"] = "forbidden_scope_or_practice_restriction"
+            result["scheduling_probe"]["detail"] = (
+                f"HTTP 403 Forbidden: eClinicalWorks rejected access to {target_resource}. "
+                "The issued token lacks required scheduling scopes or practice activation for Scheduling."
+            )
+        elif resp_status == 401:
+            result["scheduling_probe"]["outcome"] = "unauthorized"
+            result["scheduling_probe"]["detail"] = "HTTP 401 Unauthorized: Access token was rejected by eCW FHIR server."
+        elif resp_status == 400:
+            result["scheduling_probe"]["outcome"] = "bad_request"
+            result["scheduling_probe"]["detail"] = "HTTP 400 Bad Request: Query parameters missing or not accepted by eCW."
+        else:
+            result["scheduling_probe"]["outcome"] = f"http_{resp_status}"
+
+        return result
+
     def _get_fhir_base_url(self) -> str:
         """Validate and return practice FHIR base URL."""
         base_url = self._settings.ECW_FHIR_BASE_URL
