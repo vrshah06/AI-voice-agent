@@ -6,15 +6,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.appointments import router as appointments_router
-from app.api.health import router as health_router
-from app.api.knowledge import router as knowledge_router
-from app.api.medications import router as medications_router
-from app.api.messages import router as messages_router
-from app.api.patients import router as patients_router
-from app.api.retell import router as retell_router
-from app.api.auth import router as auth_router
-from app.api.ecw_oauth import router as ecw_oauth_router
+from app.api import (
+    appointments_router,
+    auth_router,
+    ecw_oauth_router,
+    health_router,
+    knowledge_router,
+    medications_router,
+    messages_router,
+    patients_router,
+    retell_router,
+)
 from app.core.config import settings
 
 # Configure basic logging
@@ -42,6 +44,7 @@ app = FastAPI(
         "**Core Capabilities:**\n"
         f"- 🩺 **Greeting & Triage**: Identify caller intent for {settings.CLINIC_NAME}.\n"
         "- 👤 **Real eCW Patient Demographics**: Live EHR retrieval (`GET /api/patients/{patient_id}`) and search via SMART on FHIR.\n"
+        "- 📋 **Live eCW Appointment Retrieval**: Retrieve patient encounter details via `GET /api/appointments/search`.\n"
         "- 📅 **Appointment Availability & Booking**: In-memory scheduling with conflict prevention.\n"
         "- 🔄 **Reschedule & Cancellation**: Modify or cancel appointments with state release.\n"
         "- 💊 **Medication Refills**: Log refill requests for mandatory physician authorization.\n"
@@ -100,7 +103,11 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     }
     if hasattr(exc, "blocker") and getattr(exc, "blocker"):
         content["blocker"] = getattr(exc, "blocker")
-    if request.url.path.startswith("/api/retell") or request.url.path.startswith("/api/appointments"):
+    if request.url.path.startswith("/api/retell") or (
+        request.url.path.startswith("/api/appointments")
+        and not request.url.path.startswith("/api/appointments/search")
+        and not request.url.path.startswith("/api/appointments/ecw")
+    ):
         content["is_demo_data"] = True
         content["disclaimer"] = settings.DISCLAIMER
     return JSONResponse(

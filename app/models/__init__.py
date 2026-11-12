@@ -17,15 +17,19 @@ from app.models.appointments import (
     AppointmentAvailabilityResponse,
     AppointmentBookRequest,
     AppointmentBookResponse,
-    AppointmentRescheduleRequest,
-    AppointmentRescheduleResponse,
     AppointmentCancelRequest,
     AppointmentCancelResponse,
+    AppointmentDetail,
+    AppointmentRescheduleRequest,
+    AppointmentRescheduleResponse,
+    AppointmentSearchResponse,
+    PatientBasicInfo,
+    PatientCandidate,
 )
 from app.models.medications import MedicationRefillRequest, MedicationRefillResponse
 from app.models.knowledge import ClinicKnowledgeRequest, ClinicKnowledgeResponse
 from app.models.messages import TakeMessageRequest, TakeMessageResponse
-from app.models.retell import RetellWebhookRequest, RetellToolResponse
+from app.models.retell import RetellCallContext, RetellToolResponse, RetellWebhookRequest
 
 __all__ = [
     "BaseDemoResponse",
@@ -47,12 +51,17 @@ __all__ = [
     "AppointmentRescheduleResponse",
     "AppointmentCancelRequest",
     "AppointmentCancelResponse",
+    "AppointmentDetail",
+    "AppointmentSearchResponse",
+    "PatientBasicInfo",
+    "PatientCandidate",
     "MedicationRefillRequest",
     "MedicationRefillResponse",
     "ClinicKnowledgeRequest",
     "ClinicKnowledgeResponse",
     "TakeMessageRequest",
     "TakeMessageResponse",
+    "RetellCallContext",
     "RetellWebhookRequest",
     "RetellToolResponse",
 ]

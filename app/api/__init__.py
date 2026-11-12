@@ -7,6 +7,7 @@ from app.api.knowledge import router as knowledge_router
 from app.api.messages import router as messages_router
 from app.api.retell import router as retell_router
 from app.api.auth import router as auth_router
+from app.api.ecw_oauth import router as ecw_oauth_router
 
 __all__ = [
     "health_router",
@@ -17,4 +18,5 @@ __all__ = [
     "messages_router",
     "retell_router",
     "auth_router",
+    "ecw_oauth_router",
 ]

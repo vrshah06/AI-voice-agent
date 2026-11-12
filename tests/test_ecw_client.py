@@ -530,8 +530,15 @@ def test_test_scheduling_access_scope_restricted(ecw_client_instance):
 
     assert report["status"] == "scope_restricted"
     assert report["authenticated"] is True
-    assert report["scope_analysis"]["grants_scheduling"] is False
-    assert "system/Slot.read" in report["scope_analysis"]["scheduling_requirements"]
+    assert report["http_status"] == 403
+    assert report["token_type"] == "Bearer"
+    assert "expiry" in report
+    assert report["scopes"] == "system/Patient.read"
+    assert report["api_response_status"] == "forbidden_scope_or_practice_restriction"
+    assert report["scope_analysis"]["approved_scope"] == "system/Patient.read"
+    assert "system/Patient.read" in report["scope_analysis"]["scope_status"]
+    assert "eClinicalWorks SMART Backend Services requires explicit scheduling scopes" in report["scope_analysis"]["scheduling_authorization_issue"]
+    assert "not confirmed eCW-approved scopes; do not add them without official eCW confirmation" in report["scope_analysis"]["scheduling_authorization_issue"]
     assert report["scheduling_probe"]["http_status"] == 403
     assert "mock-token-abc" not in str(report)
 
@@ -562,6 +569,11 @@ def test_test_scheduling_access_success(ecw_client_instance):
     report = asyncio.run(ecw_client_instance.test_scheduling_access(resource="Slot"))
 
     assert report["status"] == "success"
+    assert report["http_status"] == 200
+    assert report["token_type"] == "Bearer"
+    assert report["expiry"] > 0
+    assert report["scopes"] == "system/Patient.read"
+    assert report["api_response_status"] == "authorized"
     assert report["scheduling_probe"]["outcome"] == "authorized"
     assert report["scheduling_probe"]["bundle_summary"]["total"] == 3
     assert report["scheduling_probe"]["bundle_summary"]["entry_count"] == 1
@@ -575,4 +587,198 @@ def test_test_scheduling_access_invalid_resource(ecw_client_instance):
 
     assert exc_info.value.status_code == 400
     assert "Allowed resources" in exc_info.value.detail
+
+
+# =====================================================================
+# Encounter.read & Appointment Mapping Unit Tests
+# =====================================================================
+
+def test_parse_fhir_datetime_timezone_conversion():
+    """Verify ISO-8601 parsing converts UTC / offsets to Eastern Time without fabricating times for date-only."""
+    from app.services.ecw_client import parse_fhir_datetime
+
+    # 1. UTC Z timestamp (15:30 UTC is 10:30 AM EST in winter)
+    d1, t1 = parse_fhir_datetime("2026-11-20T15:30:00Z")
+    assert d1 == "2026-11-20"
+    assert t1 == "10:30 AM"
+
+    # 2. Offset timestamp (-05:00 EST)
+    d2, t2 = parse_fhir_datetime("2026-11-20T10:30:00-05:00")
+    assert d2 == "2026-11-20"
+    assert t2 == "10:30 AM"
+
+    # 3. Afternoon offset (-05:00)
+    d3, t3 = parse_fhir_datetime("2026-12-05T14:00:00-05:00")
+    assert d3 == "2026-12-05"
+    assert t3 == "02:00 PM"
+
+    # 4. Date-only string (no fabricated time)
+    d4, t4 = parse_fhir_datetime("2026-11-20")
+    assert d4 == "2026-11-20"
+    assert t4 is None
+
+    # 5. None or empty
+    assert parse_fhir_datetime(None) == (None, None)
+    assert parse_fhir_datetime("") == (None, None)
+
+
+def test_normalize_time_str_formats():
+    """Verify various 12-hour and 24-hour time formats parse to (hour, minute)."""
+    from app.services.ecw_client import normalize_time_str
+
+    assert normalize_time_str("10:30 AM") == (10, 30)
+    assert normalize_time_str("10:30AM") == (10, 30)
+    assert normalize_time_str("10:30") == (10, 30)
+    assert normalize_time_str("14:30") == (14, 30)
+    assert normalize_time_str("02:00 PM") == (14, 0)
+    assert normalize_time_str("2:00 PM") == (14, 0)
+    assert normalize_time_str("invalid") is None
+    assert normalize_time_str("") is None
+
+
+def test_get_patient_encounters_unit_success(ecw_client_instance):
+    """Test retrieving encounters bundle and parsing resources."""
+    ecw_client_instance._cached_token = "mock-token"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 1,
+        "entry": [
+            {
+                "resource": {
+                    "resourceType": "Encounter",
+                    "id": "enc-001",
+                    "status": "planned",
+                    "period": {
+                        "start": "2026-11-20T10:30:00-05:00",
+                        "end": "2026-11-20T11:00:00-05:00",
+                    },
+                    "participant": [
+                        {
+                            "individual": {
+                                "display": "Dr. Example",
+                            }
+                        }
+                    ],
+                    "location": [
+                        {
+                            "location": {
+                                "display": "MD Primary Care",
+                            }
+                        }
+                    ],
+                    "type": [
+                        {
+                            "text": "Follow-up",
+                        }
+                    ],
+                }
+            }
+        ],
+    }
+
+    mock_resp = httpx.Response(
+        status_code=200,
+        json=bundle,
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Encounter"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        assert params.get("patient") == "12345"
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    encounters = asyncio.run(ecw_client_instance.get_patient_encounters(patient_id="12345"))
+    assert len(encounters) == 1
+    assert encounters[0]["id"] == "enc-001"
+
+    apt = ecw_client_instance.parse_encounter_to_appointment(encounters[0])
+    assert apt.encounter_id == "enc-001"
+    assert apt.appointment_date == "2026-11-20"
+    assert apt.appointment_time == "10:30 AM"
+    assert apt.end_time == "11:00 AM"
+    assert apt.status == "planned"
+    assert apt.provider == "Dr. Example"
+    assert apt.location == "MD Primary Care"
+    assert apt.visit_type == "Follow-up"
+
+
+def test_get_patient_encounters_unit_403_permission_error(ecw_client_instance):
+    """Test that HTTP 403 on Encounter raises EcwPermissionError with clear diagnostics."""
+    ecw_client_instance._cached_token = "mock-token"
+    ecw_client_instance._token_expires_at = time.time() + 300
+
+    mock_resp = httpx.Response(
+        status_code=403,
+        text="Access denied: Scope Encounter.read required.",
+        request=httpx.Request("GET", "https://staging-fhir.ecwcloud.com/fhir/r4/TEST01/Encounter"),
+    )
+
+    async def mock_get(url, params=None, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+    ecw_client_instance._custom_http_client = mock_client
+
+    with pytest.raises(EcwPermissionError) as exc_info:
+        asyncio.run(ecw_client_instance.get_patient_encounters(patient_id="12345"))
+
+    assert exc_info.value.status_code == 403
+    assert "Encounter.read" in exc_info.value.detail
+
+
+def test_filter_appointments_unit():
+    """Verify local filtering by appointment_date and appointment_time."""
+    from app.models.appointments import AppointmentDetail
+    from app.services.ecw_client import ecw_client
+
+    appointments = [
+        AppointmentDetail(
+            encounter_id="1",
+            appointment_date="2026-11-20",
+            appointment_time="10:30 AM",
+            end_time="11:00 AM",
+            status="planned",
+        ),
+        AppointmentDetail(
+            encounter_id="2",
+            appointment_date="2026-11-20",
+            appointment_time="02:00 PM",
+            end_time=None,
+            status="planned",
+        ),
+        AppointmentDetail(
+            encounter_id="3",
+            appointment_date="2026-12-05",
+            appointment_time="10:30 AM",
+            end_time=None,
+            status="planned",
+        ),
+    ]
+
+    # Filter by date only
+    f_date = ecw_client.filter_appointments(appointments, appointment_date="2026-11-20")
+    assert len(f_date) == 2
+    assert {a.encounter_id for a in f_date} == {"1", "2"}
+
+    # Filter by time only
+    f_time = ecw_client.filter_appointments(appointments, appointment_time="10:30 AM")
+    assert len(f_time) == 2
+    assert {a.encounter_id for a in f_time} == {"1", "3"}
+
+    # Filter by both date and time
+    f_both = ecw_client.filter_appointments(
+        appointments,
+        appointment_date="2026-11-20",
+        appointment_time="10:30 AM",
+    )
+    assert len(f_both) == 1
+    assert f_both[0].encounter_id == "1"
+
 

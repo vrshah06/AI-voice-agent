@@ -226,3 +226,45 @@ class AppointmentCancelResponse(BaseDemoResponse):
     cancelled_date: str = Field(..., description="Date of cancelled appointment.")
     cancelled_time: str = Field(..., description="Time of cancelled appointment.")
     message: str = Field(..., description="Spoken message for voice agent.")
+
+
+# =====================================================================
+# Real eCW Encounter / Appointment Retrieval Models
+# =====================================================================
+
+class PatientBasicInfo(BaseModel):
+    """Patient summary returned in appointment search."""
+    patient_id: str = Field(..., description="eCW patient identifier", examples=["12345"])
+    first_name: Optional[str] = Field(default=None, description="Patient first name", examples=["John"])
+    last_name: Optional[str] = Field(default=None, description="Patient last name", examples=["Smith"])
+
+
+class AppointmentDetail(BaseModel):
+    """Normalized appointment detail mapped from eCW FHIR Encounter resource."""
+    encounter_id: str = Field(..., description="eCW Encounter ID", examples=["enc-001"])
+    appointment_date: Optional[str] = Field(default=None, description="Appointment date formatted as YYYY-MM-DD", examples=["2026-11-20"])
+    appointment_time: Optional[str] = Field(default=None, description="Appointment start time (e.g. 10:30 AM)", examples=["10:30 AM"])
+    end_time: Optional[str] = Field(default=None, description="Appointment end time (e.g. 11:00 AM)", examples=["11:00 AM"])
+    status: Optional[str] = Field(default=None, description="Encounter status (e.g. planned, arrived, finished)", examples=["planned"])
+    provider: Optional[str] = Field(default=None, description="Physician or practitioner name", examples=["Dr. Example"])
+    location: Optional[str] = Field(default=None, description="Clinic or facility location name", examples=["MD Primary Care"])
+    visit_type: Optional[str] = Field(default=None, description="Encounter class, type, or reason text", examples=["Follow-up"])
+
+
+class PatientCandidate(BaseModel):
+    """Candidate patient summary returned when multiple patients match search criteria."""
+    patient_id: str = Field(..., description="eCW patient identifier", examples=["12345"])
+    first_name: Optional[str] = Field(default=None, description="Patient first name", examples=["John"])
+    last_name: Optional[str] = Field(default=None, description="Patient last name", examples=["Smith"])
+    date_of_birth: Optional[str] = Field(default=None, description="Date of birth formatted as YYYY-MM-DD", examples=["1985-05-12"])
+
+
+class AppointmentSearchResponse(BaseModel):
+    """Structured response returned by GET /api/appointments/search."""
+    success: bool = Field(..., description="Indicates whether appointment search succeeded")
+    patient: Optional[PatientBasicInfo] = Field(default=None, description="Identified patient details")
+    total_appointments: int = Field(default=0, description="Total matching appointments found")
+    appointments: List[AppointmentDetail] = Field(default_factory=list, description="List of retrieved appointment details")
+    message: Optional[str] = Field(default=None, description="Status or guidance message")
+    candidates: Optional[List[PatientCandidate]] = Field(default=None, description="Candidate patients when multiple match")
+
