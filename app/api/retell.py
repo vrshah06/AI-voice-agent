@@ -5,15 +5,18 @@ supporting both wrapped payloads ({name, call, args}) and flat payloads, header-
 API key auth, and conversational error handling so voice agents do not crash during live calls.
 """
 import logging
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 
+from app.api.appointments import execute_appointment_search
 from app.core.security import verify_retell_or_api_key
 from app.models.appointments import (
     AppointmentAvailabilityRequest,
     AppointmentBookRequest,
     AppointmentCancelRequest,
+    AppointmentDetail,
     AppointmentRescheduleRequest,
 )
 from app.models.knowledge import ClinicKnowledgeRequest
@@ -34,6 +37,59 @@ router = APIRouter(
     tags=["Retell AI Adapter"],
     dependencies=[Depends(verify_retell_or_api_key)],
 )
+
+
+def _normalize_optional_date(raw: Any) -> Optional[str]:
+    """Normalize optional date input (YYYY-MM-DD or MM/DD/YYYY) into YYYY-MM-DD."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s
+
+
+def _format_spoken_date(iso_date: Optional[str]) -> str:
+    """Format YYYY-MM-DD into a natural spoken date (e.g. 'November 20, 2026')."""
+    if not iso_date:
+        return "an unspecified date"
+    try:
+        dt = datetime.strptime(iso_date, "%Y-%m-%d").date()
+        return dt.strftime("%B %d, %Y").replace(" 0", " ")
+    except ValueError:
+        return iso_date
+
+
+def _format_appointments_for_voice(
+    patient_name: str,
+    appointments: List[AppointmentDetail],
+) -> str:
+    """Build a concise, natural spoken summary of retrieved eCW appointments."""
+    total = len(appointments)
+    noun = "appointment" if total == 1 else "appointments"
+    parts = [f"I found {total} {noun} for {patient_name}."]
+
+    max_spoken = 5
+    for idx, apt in enumerate(appointments[:max_spoken]):
+        date_str = _format_spoken_date(apt.appointment_date)
+        time_str = f" at {apt.appointment_time}" if apt.appointment_time else ""
+        provider_str = f" with {apt.provider}" if apt.provider else ""
+        location_str = f" at {apt.location}" if apt.location else ""
+        type_str = f" ({apt.visit_type})" if apt.visit_type else ""
+        status_str = f", status {apt.status}" if apt.status else ""
+
+        prefix = "First," if total > 1 and idx == 0 else ("Next," if total > 1 else "It is")
+        parts.append(f"{prefix} on {date_str}{time_str}{provider_str}{location_str}{type_str}{status_str}.")
+
+    if total > max_spoken:
+        parts.append(f"There are {total - max_spoken} additional appointments on file.")
+
+    return " ".join(parts)
 
 
 async def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResponse:
@@ -137,12 +193,86 @@ async def _dispatch_tool(tool_name: str, args: Dict[str, Any]) -> RetellToolResp
                 data=result.model_dump(),
             )
 
+        # 9. Search Patient Appointments (Live eCW Patient.read + Encounter.read)
+        elif normalized_name in [
+            "search_appointments",
+            "get_appointments",
+            "get_patient_appointments",
+            "lookup_appointments",
+            "check_appointments",
+            "find_appointments",
+            "appointment_search",
+        ]:
+            first_name = str(args.get("first_name") or "").strip()
+            last_name = str(args.get("last_name") or "").strip()
+            if (not first_name or not last_name) and args.get("patient_name"):
+                name_parts = str(args["patient_name"]).strip().split(None, 1)
+                if not first_name and name_parts:
+                    first_name = name_parts[0]
+                if not last_name and len(name_parts) > 1:
+                    last_name = name_parts[1]
+
+            if not first_name or not last_name:
+                return RetellToolResponse(
+                    status="error",
+                    message="I need both the patient's first and last name to look up their appointments. Could you please provide their full name?",
+                    error="Missing required parameters: first_name and last_name.",
+                )
+
+            raw_dob = args.get("dob") or args.get("date_of_birth")
+            raw_apt_date = args.get("appointment_date") or args.get("date")
+            raw_apt_time = args.get("appointment_time") or args.get("time")
+
+            clean_dob = _normalize_optional_date(raw_dob)
+            clean_apt_date = _normalize_optional_date(raw_apt_date)
+            clean_apt_time = str(raw_apt_time).strip() if raw_apt_time else None
+
+            result = await execute_appointment_search(
+                first_name=first_name,
+                last_name=last_name,
+                dob=clean_dob,
+                appointment_date=clean_apt_date,
+                appointment_time=clean_apt_time,
+            )
+
+            if not result.success:
+                if result.candidates:
+                    return RetellToolResponse(
+                        status="multiple_matches",
+                        message=(
+                            f"I found multiple patient records matching {first_name} {last_name}. "
+                            "Could you please provide the patient's date of birth so I can confirm the right chart?"
+                        ),
+                        data=result.model_dump(),
+                    )
+                return RetellToolResponse(
+                    status="not_found",
+                    message=result.message or f"I could not find a patient record for {first_name} {last_name}.",
+                    data=result.model_dump(),
+                )
+
+            patient_display = (
+                f"{result.patient.first_name or first_name} {result.patient.last_name or last_name}".strip()
+                if result.patient
+                else f"{first_name} {last_name}"
+            )
+            if result.total_appointments == 0:
+                spoken_msg = result.message or f"I found {patient_display}'s chart, but there are no appointments on file."
+            else:
+                spoken_msg = _format_appointments_for_voice(patient_display, result.appointments)
+
+            return RetellToolResponse(
+                status="success",
+                message=spoken_msg,
+                data=result.model_dump(),
+            )
+
         else:
             return RetellToolResponse(
                 status="error",
                 message=(
                     f"Unknown tool function '{tool_name}'. Available tools: identify_patient, "
-                    "check_appointment_availability, book_appointment, reschedule_appointment, "
+                    "search_appointments, check_appointment_availability, book_appointment, reschedule_appointment, "
                     "cancel_appointment, request_medication_refill, answer_clinic_question, take_message."
                 ),
                 error=f"Unrecognized tool: {tool_name}",

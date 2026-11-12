@@ -83,70 +83,14 @@ async def cancel_appointment(payload: AppointmentCancelRequest) -> AppointmentCa
 # Real eCW Encounter / Appointment Retrieval API
 # =====================================================================
 
-@router.get(
-    "/search",
-    response_model=AppointmentSearchResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Search Patient Appointments via eCW Encounter",
-    description=(
-        "Search a patient's existing appointment and encounter details from eClinicalWorks EHR using "
-        "the existing `Patient.read` and `Encounter.read` FHIR scopes.\n\n"
-        "### Workflow:\n"
-        "1. **Patient Identification**: Searches for the patient in eCW using First Name, Last Name, "
-        "and optional Date of Birth (`dob`).\n"
-        "2. **Disambiguation & Matching**:\n"
-        "   - If no patient matches: Returns a clean not-found response (`success: false`).\n"
-        "   - If multiple patients match: Returns patient ambiguity response (`success: false`) with minimal candidate summaries.\n"
-        "   - If uniquely matched: Uses the patient's actual eCW Patient ID to query the Encounter API.\n"
-        "3. **Encounter Retrieval**: Queries eCW FHIR `GET /Encounter?patient={patient_id}` using the authorized Provider App token.\n"
-        "4. **Filtering**: Optionally filters appointments by `appointment_date` (YYYY-MM-DD) and/or `appointment_time` (e.g. 10:30 AM).\n\n"
-        "**Clinical Safety Notice**: A name-only match confirms record existence only for initial development testing. "
-        "Do not consider a name-only match sufficient identity verification for production disclosure of protected health information (PHI)."
-    ),
-    responses={
-        200: {
-            "description": "Appointment search completed successfully, or returned patient resolution guidance.",
-            "model": AppointmentSearchResponse,
-        },
-        400: {"description": "Invalid query parameters (e.g. malformed date or time format)."},
-        401: {"description": "eClinicalWorks authentication failed or access token rejected."},
-        403: {"description": "Insufficient permissions: Encounter.read scope or practice authorization missing."},
-        404: {"description": "Requested resource not found."},
-        429: {"description": "eClinicalWorks FHIR API rate limit reached."},
-        502: {"description": "eClinicalWorks upstream FHIR server failure or malformed payload."},
-        503: {"description": "eClinicalWorks service temporarily unavailable."},
-    },
-)
-async def search_patient_appointments(
-    first_name: str = Query(
-        ...,
-        min_length=1,
-        description="Patient's legal first / given name",
-        examples=["John"],
-    ),
-    last_name: str = Query(
-        ...,
-        min_length=1,
-        description="Patient's legal last / family name",
-        examples=["Smith"],
-    ),
-    dob: Optional[str] = Query(
-        default=None,
-        description="Patient date of birth (YYYY-MM-DD) to distinguish patients with similar names",
-        examples=["1985-05-12"],
-    ),
-    appointment_date: Optional[str] = Query(
-        default=None,
-        description="Filter appointments by date (YYYY-MM-DD)",
-        examples=["2026-11-20"],
-    ),
-    appointment_time: Optional[str] = Query(
-        default=None,
-        description="Filter appointments by time (e.g. '10:30 AM' or '14:30')",
-        examples=["10:30 AM"],
-    ),
+async def execute_appointment_search(
+    first_name: str,
+    last_name: str,
+    dob: Optional[str] = None,
+    appointment_date: Optional[str] = None,
+    appointment_time: Optional[str] = None,
 ) -> AppointmentSearchResponse:
-    """Retrieve existing appointment/encounter details for a patient from eCW EHR."""
+    """Core logic to validate inputs, find the patient in eCW, and retrieve filtered Encounter records."""
     clean_first = first_name.strip() if first_name else ""
     clean_last = last_name.strip() if last_name else ""
     clean_dob = dob.strip() if dob else None
@@ -278,6 +222,79 @@ async def search_patient_appointments(
         total_appointments=len(appointments),
         appointments=appointments,
         message=message,
+    )
+
+
+@router.get(
+    "/search",
+    response_model=AppointmentSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Search Patient Appointments via eCW Encounter",
+    description=(
+        "Search a patient's existing appointment and encounter details from eClinicalWorks EHR using "
+        "the existing `Patient.read` and `Encounter.read` FHIR scopes.\n\n"
+        "### Workflow:\n"
+        "1. **Patient Identification**: Searches for the patient in eCW using First Name, Last Name, "
+        "and optional Date of Birth (`dob`).\n"
+        "2. **Disambiguation & Matching**:\n"
+        "   - If no patient matches: Returns a clean not-found response (`success: false`).\n"
+        "   - If multiple patients match: Returns patient ambiguity response (`success: false`) with minimal candidate summaries.\n"
+        "   - If uniquely matched: Uses the patient's actual eCW Patient ID to query the Encounter API.\n"
+        "3. **Encounter Retrieval**: Queries eCW FHIR `GET /Encounter?patient={patient_id}` using the authorized Provider App token.\n"
+        "4. **Filtering**: Optionally filters appointments by `appointment_date` (YYYY-MM-DD) and/or `appointment_time` (e.g. 10:30 AM).\n\n"
+        "**Clinical Safety Notice**: A name-only match confirms record existence only for initial development testing. "
+        "Do not consider a name-only match sufficient identity verification for production disclosure of protected health information (PHI)."
+    ),
+    responses={
+        200: {
+            "description": "Appointment search completed successfully, or returned patient resolution guidance.",
+            "model": AppointmentSearchResponse,
+        },
+        400: {"description": "Invalid query parameters (e.g. malformed date or time format)."},
+        401: {"description": "eClinicalWorks authentication failed or access token rejected."},
+        403: {"description": "Insufficient permissions: Encounter.read scope or practice authorization missing."},
+        404: {"description": "Requested resource not found."},
+        429: {"description": "eClinicalWorks FHIR API rate limit reached."},
+        502: {"description": "eClinicalWorks upstream FHIR server failure or malformed payload."},
+        503: {"description": "eClinicalWorks service temporarily unavailable."},
+    },
+)
+async def search_patient_appointments(
+    first_name: str = Query(
+        ...,
+        min_length=1,
+        description="Patient's legal first / given name",
+        examples=["John"],
+    ),
+    last_name: str = Query(
+        ...,
+        min_length=1,
+        description="Patient's legal last / family name",
+        examples=["Smith"],
+    ),
+    dob: Optional[str] = Query(
+        default=None,
+        description="Patient date of birth (YYYY-MM-DD) to distinguish patients with similar names",
+        examples=["1985-05-12"],
+    ),
+    appointment_date: Optional[str] = Query(
+        default=None,
+        description="Filter appointments by date (YYYY-MM-DD)",
+        examples=["2026-11-20"],
+    ),
+    appointment_time: Optional[str] = Query(
+        default=None,
+        description="Filter appointments by time (e.g. '10:30 AM' or '14:30')",
+        examples=["10:30 AM"],
+    ),
+) -> AppointmentSearchResponse:
+    """Retrieve existing appointment/encounter details for a patient from eCW EHR."""
+    return await execute_appointment_search(
+        first_name=first_name,
+        last_name=last_name,
+        dob=dob,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
     )
 
 

@@ -387,3 +387,157 @@ def test_retell_identify_patient_date_normalization(client: TestClient, auth_hea
         assert data["data"]["date_of_birth"] == "1965-02-28"
         mock_search.assert_awaited_once_with(first_name="Sarah", last_name="Connor", dob="1965-02-28")
 
+
+def test_retell_webhook_search_appointments_success(client: TestClient, auth_headers: dict):
+    """Verify Retell webhook invoking search_appointments returns spoken summary and structured data."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+    from app.models.appointments import AppointmentDetail
+
+    mock_patient = PatientSearchMatchResponse(
+        match_status="single_match",
+        match_count=1,
+        patients=[
+            PatientMatchSummary(
+                patient_id="Rr2vKZQ-123",
+                first_name="Lorraine",
+                last_name="Walker",
+                full_name="Lorraine Walker",
+                date_of_birth="1952-02-18",
+                active=True,
+            )
+        ],
+        identity_verification_required=True,
+        notice="Single match.",
+    )
+    mock_apts = [
+        AppointmentDetail(
+            encounter_id="enc-101",
+            appointment_date="2026-11-20",
+            appointment_time="10:30 AM",
+            end_time="11:00 AM",
+            status="planned",
+            provider="Dr. Example",
+            location="MD Primary Care",
+            visit_type="Follow-up",
+        )
+    ]
+
+    with patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search, \
+         patch.object(ecw_client, "search_patient_encounters", new_callable=AsyncMock) as mock_enc:
+        mock_search.return_value = mock_patient
+        mock_enc.return_value = mock_apts
+
+        res = client.post(
+            "/api/retell/webhook",
+            json={
+                "name": "search_appointments",
+                "call": {"call_id": "call_retell_001"},
+                "args": {
+                    "first_name": "Lorraine",
+                    "last_name": "Walker",
+                    "dob": "1952-02-18",
+                },
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert "1 appointment for Lorraine Walker" in data["message"]
+        assert "November 20, 2026" in data["message"]
+        assert "10:30 AM" in data["message"]
+        assert "Dr. Example" in data["message"]
+        assert data["data"]["total_appointments"] == 1
+        assert data["data"]["appointments"][0]["encounter_id"] == "enc-101"
+
+
+def test_retell_named_tool_search_appointments_patient_name_split(client: TestClient, auth_headers: dict):
+    """Verify /api/retell/tools/search_appointments accepts patient_name and MM/DD/YYYY date_of_birth."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+
+    mock_patient = PatientSearchMatchResponse(
+        match_status="single_match",
+        match_count=1,
+        patients=[
+            PatientMatchSummary(
+                patient_id="12345",
+                first_name="John",
+                last_name="Smith",
+                full_name="John Smith",
+                date_of_birth="1985-05-12",
+                active=True,
+            )
+        ],
+        identity_verification_required=True,
+        notice="Single match.",
+    )
+
+    with patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search, \
+         patch.object(ecw_client, "search_patient_encounters", new_callable=AsyncMock) as mock_enc:
+        mock_search.return_value = mock_patient
+        mock_enc.return_value = []
+
+        res = client.post(
+            "/api/retell/tools/search_appointments",
+            json={
+                "patient_name": "John Smith",
+                "date_of_birth": "05/12/1985",
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert "no appointments" in data["message"].lower()
+        mock_search.assert_awaited_once_with(first_name="John", last_name="Smith", dob="1985-05-12")
+
+
+def test_retell_search_appointments_multiple_matches(client: TestClient, auth_headers: dict):
+    """Verify Retell search_appointments asks for DOB when multiple patients match."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.ecw_client import ecw_client
+    from app.models.patient import PatientMatchSummary, PatientSearchMatchResponse
+
+    mock_multi = PatientSearchMatchResponse(
+        match_status="multiple_matches",
+        match_count=2,
+        patients=[
+            PatientMatchSummary(patient_id="1", first_name="John", last_name="Smith", full_name="John Smith", date_of_birth="1980-01-01", active=True),
+            PatientMatchSummary(patient_id="2", first_name="John", last_name="Smith", full_name="John Smith", date_of_birth="1992-09-20", active=True),
+        ],
+        identity_verification_required=True,
+        notice="Multiple matches.",
+    )
+
+    with patch.object(ecw_client, "search_patient_by_name_dob", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = mock_multi
+
+        res = client.post(
+            "/api/retell/tools/search_appointments",
+            json={"first_name": "John", "last_name": "Smith"},
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "multiple_matches"
+        assert "date of birth" in data["message"].lower()
+        assert len(data["data"]["candidates"]) == 2
+
+
+def test_retell_search_appointments_missing_name(client: TestClient, auth_headers: dict):
+    """Verify Retell search_appointments handles missing name conversationally without HTTP crash."""
+    res = client.post(
+        "/api/retell/tools/search_appointments",
+        json={"dob": "1985-05-12"},
+        headers=auth_headers,
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "error"
+    assert "first and last name" in data["message"].lower()
+
+

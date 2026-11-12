@@ -42,11 +42,17 @@ def sync_flow(target_url=None):
         "Content-Type": "application/json"
     }
 
-    # 1. Fetch Agents to locate conversation_flow_id
-    req = urllib.request.Request("https://api.retellai.com/list-agents", headers=headers)
+    # 1. Fetch Agents to locate conversation_flow_id (Retell v2 POST /v2/list-agents)
+    req = urllib.request.Request(
+        "https://api.retellai.com/v2/list-agents",
+        data=json.dumps({}).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req) as resp:
-            agents = json.loads(resp.read().decode())
+            payload = json.loads(resp.read().decode())
+            agents = payload.get("items", []) if isinstance(payload, dict) else payload
     except Exception as e:
         print(f"Failed to list agents: {e}")
         sys.exit(1)
@@ -58,6 +64,11 @@ def sync_flow(target_url=None):
     agent = agents[0]
     agent_id = agent.get("agent_id")
     flow_id = agent.get("response_engine", {}).get("conversation_flow_id")
+    if not flow_id and agent_id:
+        agent_req = urllib.request.Request(f"https://api.retellai.com/get-agent/{agent_id}", headers=headers)
+        with urllib.request.urlopen(agent_req) as resp:
+            agent_detail = json.loads(resp.read().decode())
+            flow_id = agent_detail.get("response_engine", {}).get("conversation_flow_id")
     print(f"[*] Found Agent: {agent.get('agent_name')} ({agent_id})")
     print(f"[*] Conversation Flow ID: {flow_id}")
 
@@ -89,6 +100,29 @@ def sync_flow(target_url=None):
                     "date_of_birth": {"type": "string", "description": "Patient date of birth in YYYY-MM-DD or MM/DD/YYYY format"}
                 },
                 "required": ["date_of_birth"]
+            },
+            "speak_after_execution": True,
+            "speak_during_execution": False,
+            "timeout_ms": 60000
+        },
+        {
+            "tool_id": "tool-search-appointments",
+            "name": "search_appointments",
+            "type": "custom",
+            "method": "POST",
+            "url": f"{base_url}/api/retell/tools/search_appointments",
+            "description": f"Retrieves a patient's existing scheduled appointments/encounters from {CLINIC_NAME} eClinicalWorks EHR using name and optional date of birth, appointment date, or appointment time.",
+            "headers": {"X-Api-Key": WEBHOOK_SECRET_KEY},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "first_name": {"type": "string", "description": "Patient's legal first name"},
+                    "last_name": {"type": "string", "description": "Patient's legal last name"},
+                    "dob": {"type": "string", "description": "Patient date of birth in YYYY-MM-DD format (if needed to disambiguate)"},
+                    "appointment_date": {"type": "string", "description": "Optional appointment date filter (YYYY-MM-DD)"},
+                    "appointment_time": {"type": "string", "description": "Optional appointment time filter (e.g. 10:30 AM)"}
+                },
+                "required": ["first_name", "last_name"]
             },
             "speak_after_execution": True,
             "speak_during_execution": False,
@@ -278,40 +312,43 @@ def sync_flow(target_url=None):
             }
 
         elif nid == "node_schedule":
-            # Give node_schedule access to check availability and book
-            n["tool_ids"] = ["tool-check-availability", "tool-book-appointment"]
+            # Give node_schedule access to search existing appointments, check availability, and book
+            n["tool_ids"] = ["tool-search-appointments", "tool-check-availability", "tool-book-appointment"]
             n["instruction"] = {
                 "text": (
-                    f"Help the caller schedule an appointment with Dr. Chintan Shah at {CLINIC_NAME}.\n"
-                    "1. Ask what date they would like to visit.\n"
-                    "2. As soon as the caller gives a date, call the tool 'check_appointment_availability' with patient_name, date_of_birth, and requested_date (YYYY-MM-DD). Do NOT just say you are checking — actually call the tool!\n"
-                    "3. Read the available slots returned by the tool (e.g. 9:00 AM, 11:00 AM, 2:30 PM).\n"
-                    "4. When the caller picks a slot, confirm their choice and call 'book_appointment'.\n"
-                    "5. Read the confirmation reference code returned by the tool."
+                    f"Help the caller check existing appointments or schedule a new appointment with Dr. Chintan Shah at {CLINIC_NAME}.\n"
+                    "1. If they want to check existing appointments, call 'search_appointments' with first_name, last_name, and optional dob/appointment_date/appointment_time.\n"
+                    "2. If they want to book a new appointment, ask what date they would like to visit.\n"
+                    "3. As soon as the caller gives a date, call the tool 'check_appointment_availability' with patient_name, date_of_birth, and requested_date (YYYY-MM-DD). Do NOT just say you are checking — actually call the tool!\n"
+                    "4. Read the available slots returned by the tool (e.g. 9:00 AM, 11:00 AM, 2:30 PM).\n"
+                    "5. When the caller picks a slot, confirm their choice and call 'book_appointment'.\n"
+                    "6. Read the confirmation reference code returned by the tool."
                 ),
                 "type": "prompt"
             }
 
         elif nid == "node_reschedule":
-            n["tool_ids"] = ["tool-check-availability", "tool-reschedule-appointment"]
+            n["tool_ids"] = ["tool-search-appointments", "tool-check-availability", "tool-reschedule-appointment"]
             n["instruction"] = {
                 "text": (
                     f"Help the caller reschedule an appointment at {CLINIC_NAME}.\n"
-                    "1. Ask for their preferred new date and time.\n"
-                    "2. Call tool 'reschedule_appointment' with patient_name, date_of_birth, new_date, and new_time.\n"
-                    "3. Read the result returned by the tool."
+                    "1. If needed, call 'search_appointments' to verify their current scheduled appointment.\n"
+                    "2. Ask for their preferred new date and time.\n"
+                    "3. Call tool 'reschedule_appointment' with patient_name, date_of_birth, new_date, and new_time.\n"
+                    "4. Read the result returned by the tool."
                 ),
                 "type": "prompt"
             }
 
         elif nid == "node_cancel":
-            n["tool_ids"] = ["tool-cancel-appointment"]
+            n["tool_ids"] = ["tool-search-appointments", "tool-cancel-appointment"]
             n["instruction"] = {
                 "text": (
                     f"Help the caller cancel an appointment at {CLINIC_NAME}.\n"
-                    "1. Confirm their intent to cancel.\n"
-                    "2. Call tool 'cancel_appointment' with patient_name and date_of_birth.\n"
-                    "3. Read the confirmation returned by the tool."
+                    "1. If needed, call 'search_appointments' to confirm which appointment they want to cancel.\n"
+                    "2. Confirm their intent to cancel.\n"
+                    "3. Call tool 'cancel_appointment' with patient_name and date_of_birth.\n"
+                    "4. Read the confirmation returned by the tool."
                 ),
                 "type": "prompt"
             }
